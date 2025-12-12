@@ -41,6 +41,16 @@ current development version that is available at
 folder in the source tree, and is built by `Sphinx
 <https://www.sphinx-doc.org/en/master/>`_.
 
+My Quick Guider
+============
+Build LoongArch QEMU
+
+.. code-block:: shell
+
+   mkdir build4la
+   cd build4la
+   ../configure --target-list=loongarch64-softmmu --enable-kvm --disable-werror --enable-vnc
+   make -j 8
 
 Building
 ========
@@ -146,14 +156,12 @@ For additional information on bug reporting consult:
 
 * `<https://wiki.qemu.org/Contribute/ReportABug>`_
 
-
 ChangeLog
 =========
 
 For version history and release notes, please visit
 `<https://wiki.qemu.org/ChangeLog/>`_ or look at the git history for
 more detailed information.
-
 
 Contact
 =======
