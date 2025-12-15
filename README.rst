@@ -49,7 +49,7 @@ Build LoongArch QEMU
 
    mkdir build4la
    cd build4la
-   ../configure --target-list=loongarch64-softmmu --enable-kvm --disable-werror --enable-vnc
+   ../configure --target-list=loongarch64-softmmu --enable-kvm --disable-werror --enable-vnc --enable-virtfs --enable-slirp
    make -j 8
 
 Building
