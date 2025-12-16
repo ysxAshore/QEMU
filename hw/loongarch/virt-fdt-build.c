@@ -22,7 +22,8 @@ static void create_fdt(LoongArchVirtMachineState *lvms)
     uint8_t rng_seed[32];
 
     ms->fdt = create_device_tree(&lvms->fdt_size);
-    if (!ms->fdt) {
+    if (!ms->fdt)
+    {
         error_report("create_device_tree() failed");
         exit(1);
     }
@@ -55,9 +56,11 @@ static void fdt_add_cpu_nodes(const LoongArchVirtMachineState *lvms)
 
     /* cpu nodes */
     possible_cpus = mc->possible_cpu_arch_ids(ms);
-    for (num = 0; num < possible_cpus->len; num++) {
+    for (num = 0; num < possible_cpus->len; num++)
+    {
         cs = possible_cpus->cpus[num].cpu;
-        if (cs == NULL) {
+        if (cs == NULL)
+        {
             continue;
         }
 
@@ -68,9 +71,10 @@ static void fdt_add_cpu_nodes(const LoongArchVirtMachineState *lvms)
         qemu_fdt_setprop_string(ms->fdt, nodename, "device_type", "cpu");
         qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
                                 cpu->dtb_compatible);
-        if (possible_cpus->cpus[num].props.has_node_id) {
+        if (possible_cpus->cpus[num].props.has_node_id)
+        {
             qemu_fdt_setprop_cell(ms->fdt, nodename, "numa-node-id",
-                possible_cpus->cpus[num].props.node_id);
+                                  possible_cpus->cpus[num].props.node_id);
         }
         qemu_fdt_setprop_cell(ms->fdt, nodename, "reg", num);
         qemu_fdt_setprop_cell(ms->fdt, nodename, "phandle",
@@ -80,20 +84,25 @@ static void fdt_add_cpu_nodes(const LoongArchVirtMachineState *lvms)
 
     /*cpu map */
     qemu_fdt_add_subnode(ms->fdt, "/cpus/cpu-map");
-    for (num = 0; num < possible_cpus->len; num++) {
+    for (num = 0; num < possible_cpus->len; num++)
+    {
         cs = possible_cpus->cpus[num].cpu;
-        if (cs == NULL) {
+        if (cs == NULL)
+        {
             continue;
         }
 
         nodename = g_strdup_printf("/cpus/cpu@%d", num);
-        if (ms->smp.threads > 1) {
+        if (ms->smp.threads > 1)
+        {
             map_path = g_strdup_printf(
                 "/cpus/cpu-map/socket%d/core%d/thread%d",
                 num / (ms->smp.cores * ms->smp.threads),
                 (num / ms->smp.threads) % ms->smp.cores,
                 num % ms->smp.threads);
-        } else {
+        }
+        else
+        {
             map_path = g_strdup_printf(
                 "/cpus/cpu-map/socket%d/core%d",
                 num / ms->smp.cores,
@@ -117,7 +126,8 @@ static void fdt_add_memory_node(MachineState *ms,
                            size >> 32, size);
     qemu_fdt_setprop_string(ms->fdt, nodename, "device_type", "memory");
 
-    if (ms->numa_state && ms->numa_state->num_nodes) {
+    if (ms->numa_state && ms->numa_state->num_nodes)
+    {
         qemu_fdt_setprop_cell(ms->fdt, nodename, "numa-node-id", node_id);
     }
 
@@ -135,14 +145,19 @@ static void fdt_add_memory_nodes(MachineState *ms)
     gap = VIRT_LOWMEM_SIZE;
     nodes = nb_numa_nodes = ms->numa_state->num_nodes;
     numa_info = ms->numa_state->nodes;
-    if (!nodes) {
+    if (!nodes)
+    {
         nodes = 1;
     }
 
-    for (i = 0; i < nodes; i++) {
-        if (nb_numa_nodes) {
+    for (i = 0; i < nodes; i++)
+    {
+        if (nb_numa_nodes)
+        {
             size = numa_info[i].node_mem;
-        } else {
+        }
+        else
+        {
             size = ram_size;
         }
 
@@ -151,14 +166,16 @@ static void fdt_add_memory_nodes(MachineState *ms)
          *   lowram:  [base, +gap)
          *   highram: [VIRT_HIGHMEM_BASE, +(len - gap))
          */
-        if (size >= gap) {
+        if (size >= gap)
+        {
             fdt_add_memory_node(ms, base, gap, i);
             size -= gap;
             base = VIRT_HIGHMEM_BASE;
             gap = ram_size - VIRT_LOWMEM_SIZE;
         }
 
-        if (size) {
+        if (size)
+        {
             fdt_add_memory_node(ms, base, size, i);
             base += size;
             gap -= size;
@@ -230,8 +247,8 @@ static void fdt_add_cpuic_node(LoongArchVirtMachineState *lvms,
 }
 
 static void fdt_add_eiointc_node(LoongArchVirtMachineState *lvms,
-                                  uint32_t *cpuintc_phandle,
-                                  uint32_t *eiointc_phandle)
+                                 uint32_t *cpuintc_phandle,
+                                 uint32_t *eiointc_phandle)
 {
     MachineState *ms = MACHINE(lvms);
     char *nodename;
@@ -266,7 +283,7 @@ static void fdt_add_pch_pic_node(LoongArchVirtMachineState *lvms,
     *pch_pic_phandle = qemu_fdt_alloc_phandle(ms->fdt);
     nodename = g_strdup_printf("/platic@%" PRIx64, pch_pic_base);
     qemu_fdt_add_subnode(ms->fdt, nodename);
-    qemu_fdt_setprop_cell(ms->fdt,  nodename, "phandle", *pch_pic_phandle);
+    qemu_fdt_setprop_cell(ms->fdt, nodename, "phandle", *pch_pic_phandle);
     qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
                             "loongson,pch-pic-1.0");
     qemu_fdt_setprop_cells(ms->fdt, nodename, "reg", 0,
@@ -327,10 +344,12 @@ static void fdt_add_pcie_irq_map_node(const LoongArchVirtMachineState *lvms,
      * to wrap to any number of devices.
      */
 
-    for (dev = 0; dev < PCI_NUM_PINS; dev++) {
+    for (dev = 0; dev < PCI_NUM_PINS; dev++)
+    {
         int devfn = dev * 0x8;
 
-        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+        for (pin = 0; pin < PCI_NUM_PINS; pin++)
+        {
             int irq_nr = 16 + ((pin + PCI_SLOT(devfn)) % PCI_NUM_PINS);
             int i = 0;
 
@@ -346,19 +365,19 @@ static void fdt_add_pcie_irq_map_node(const LoongArchVirtMachineState *lvms,
             irq_map[i++] = cpu_to_be32(*pch_pic_phandle);
             irq_map[i++] = cpu_to_be32(irq_nr);
 
-            if (!irq_map_stride) {
+            if (!irq_map_stride)
+            {
                 irq_map_stride = i;
             }
             irq_map += irq_map_stride;
         }
     }
 
-
     qemu_fdt_setprop(ms->fdt, nodename, "interrupt-map", full_irq_map,
                      PCI_NUM_PINS * PCI_NUM_PINS *
-                     irq_map_stride * sizeof(uint32_t));
+                         irq_map_stride * sizeof(uint32_t));
     qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupt-map-mask",
-                     0x1800, 0, 0, 0x7);
+                           0x1800, 0, 0, 0x7);
 }
 
 static void fdt_add_pcie_node(const LoongArchVirtMachineState *lvms,
@@ -412,7 +431,8 @@ static void fdt_add_uart_node(LoongArchVirtMachineState *lvms,
     qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "ns16550a");
     qemu_fdt_setprop_cells(ms->fdt, nodename, "reg", 0x0, base, 0x0, size);
     qemu_fdt_setprop_cell(ms->fdt, nodename, "clock-frequency", 100000000);
-    if (chosen) {
+    if (chosen)
+    {
         qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path", nodename);
     }
     qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts", irq, 0x4);
@@ -435,9 +455,32 @@ static void fdt_add_rtc_node(LoongArchVirtMachineState *lvms,
                             "loongson,ls7a-rtc");
     qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg", 2, base, 2, size);
     qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
-                           VIRT_RTC_IRQ - VIRT_GSI_BASE , 0x4);
+                           VIRT_RTC_IRQ - VIRT_GSI_BASE, 0x4);
     qemu_fdt_setprop_cell(ms->fdt, nodename, "interrupt-parent",
                           *pch_pic_phandle);
+    g_free(nodename);
+}
+
+static void fdt_add_test_device_node(LoongArchVirtMachineState *lvms,
+                                     uint32_t *pch_pic_phandle)
+{
+    // 参考 rtc_node 设计
+    /*
+    /test@100d1000 {
+        compatible = "loongson,test-device";
+        reg = <0x00 0x100d1000 0x00 0x100>;   // 地址 + 大小（各占 2 cells）
+    };
+     */
+    char *nodename;
+    hwaddr base = VIRT_TEST_DEVICE_BASE;
+    hwaddr size = VIRT_TEST_DEVICE_LEN;
+    MachineState *ms = MACHINE(lvms);
+
+    nodename = g_strdup_printf("/test@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, nodename);
+    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
+                            "loongson,test-device");
+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg", 2, base, 2, size);
     g_free(nodename);
 }
 
@@ -474,8 +517,7 @@ static void fdt_add_ged_reset(LoongArchVirtMachineState *lvms)
     qemu_fdt_setprop_string(ms->fdt, name, "compatible", "syscon-poweroff");
     qemu_fdt_setprop_cell(ms->fdt, name, "regmap", ged_handle);
     qemu_fdt_setprop_cell(ms->fdt, name, "offset", ACPI_GED_REG_SLEEP_CTL);
-    qemu_fdt_setprop_cell(ms->fdt, name, "value", ACPI_GED_SLP_EN |
-                          (ACPI_GED_SLP_TYP_S5 << ACPI_GED_SLP_TYP_POS));
+    qemu_fdt_setprop_cell(ms->fdt, name, "value", ACPI_GED_SLP_EN | (ACPI_GED_SLP_TYP_S5 << ACPI_GED_SLP_TYP_POS));
     g_free(name);
 }
 
@@ -506,13 +548,15 @@ void virt_fdt_setup(LoongArchVirtMachineState *lvms)
      * Create uart fdt node in reverse order so that they appear
      * in the finished device tree lowest address first
      */
-    for (i = VIRT_UART_COUNT; i-- > 0;) {
+    for (i = VIRT_UART_COUNT; i-- > 0;)
+    {
         hwaddr base = VIRT_UART_BASE + i * VIRT_UART_SIZE;
         int irq = VIRT_UART_IRQ + i - VIRT_GSI_BASE;
         fdt_add_uart_node(lvms, &pch_pic_phandle, base, irq, i == 0);
     }
 
     fdt_add_rtc_node(lvms, &pch_pic_phandle);
+    fdt_add_test_device_node(lvms, &pch_pic_phandle);
     fdt_add_ged_reset(lvms);
     platform_bus_add_all_fdt_nodes(machine->fdt, "/platic",
                                    VIRT_PLATFORM_BUS_BASEADDRESS,
@@ -529,5 +573,5 @@ void virt_fdt_setup(LoongArchVirtMachineState *lvms)
     rom_add_blob_fixed_as("fdt", machine->fdt, lvms->fdt_size, FDT_BASE,
                           &address_space_memory);
     qemu_register_reset_nosnapshotload(qemu_fdt_randomize_seeds,
-            rom_ptr_for_as(&address_space_memory, FDT_BASE, lvms->fdt_size));
+                                       rom_ptr_for_as(&address_space_memory, FDT_BASE, lvms->fdt_size));
 }

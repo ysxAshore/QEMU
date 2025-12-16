@@ -36,12 +36,15 @@
 #include "hw/acpi/aml-build.h"
 #include "hw/acpi/hmat.h"
 
-#define ACPI_BUILD_ALIGN_SIZE             0x1000
-#define ACPI_BUILD_TABLE_SIZE             0x20000
+#define ACPI_BUILD_ALIGN_SIZE 0x1000
+#define ACPI_BUILD_TABLE_SIZE 0x20000
 
 #ifdef DEBUG_ACPI_BUILD
-#define ACPI_BUILD_DPRINTF(fmt, ...)        \
-    do {printf("ACPI_BUILD: " fmt, ## __VA_ARGS__); } while (0)
+#define ACPI_BUILD_DPRINTF(fmt, ...)               \
+    do                                             \
+    {                                              \
+        printf("ACPI_BUILD: " fmt, ##__VA_ARGS__); \
+    } while (0)
 #else
 #define ACPI_BUILD_DPRINTF(fmt, ...)
 #endif
@@ -59,7 +62,7 @@ static void virt_madt_cpu_entry(int uid,
     build_append_int_noprefix(entry, 8, 1);       /* Length */
     build_append_int_noprefix(entry, uid, 1);     /* ACPI Processor ID */
     build_append_int_noprefix(entry, apic_id, 1); /* APIC ID */
-    build_append_int_noprefix(entry, flags, 4); /* Flags */
+    build_append_int_noprefix(entry, flags, 4);   /* Flags */
 }
 
 /* build FADT */
@@ -110,12 +113,12 @@ build_facs(GArray *table_data)
     const char *sig = "FACS";
     const uint8_t reserved[40] = {};
 
-    g_array_append_vals(table_data, sig, 4); /* Signature */
-    build_append_int_noprefix(table_data, 64, 4); /* Length */
-    build_append_int_noprefix(table_data, 0, 4); /* Hardware Signature */
-    build_append_int_noprefix(table_data, 0, 4); /* Firmware Waking Vector */
-    build_append_int_noprefix(table_data, 0, 4); /* Global Lock */
-    build_append_int_noprefix(table_data, 0, 4); /* Flags */
+    g_array_append_vals(table_data, sig, 4);       /* Signature */
+    build_append_int_noprefix(table_data, 64, 4);  /* Length */
+    build_append_int_noprefix(table_data, 0, 4);   /* Hardware Signature */
+    build_append_int_noprefix(table_data, 0, 4);   /* Firmware Waking Vector */
+    build_append_int_noprefix(table_data, 0, 4);   /* Global Lock */
+    build_append_int_noprefix(table_data, 0, 4);   /* Flags */
     g_array_append_vals(table_data, reserved, 40); /* Reserved */
 }
 
@@ -128,8 +131,7 @@ build_madt(GArray *table_data, BIOSLinker *linker,
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     const CPUArchIdList *arch_ids = mc->possible_cpu_arch_ids(ms);
     int i, arch_id, flags;
-    AcpiTable table = { .sig = "APIC", .rev = 1, .oem_id = lvms->oem_id,
-                        .oem_table_id = lvms->oem_table_id };
+    AcpiTable table = {.sig = "APIC", .rev = 1, .oem_id = lvms->oem_id, .oem_table_id = lvms->oem_table_id};
 
     acpi_table_begin(&table, table_data);
 
@@ -137,42 +139,43 @@ build_madt(GArray *table_data, BIOSLinker *linker,
     build_append_int_noprefix(table_data, 0, 4);
     build_append_int_noprefix(table_data, 1 /* PCAT_COMPAT */, 4); /* Flags */
 
-    for (i = 0; i < arch_ids->len; i++) {
+    for (i = 0; i < arch_ids->len; i++)
+    {
         /* Processor Core Interrupt Controller Structure */
         arch_id = arch_ids->cpus[i].arch_id;
-        flags   = arch_ids->cpus[i].cpu ? 1 : 0;
-        build_append_int_noprefix(table_data, 17, 1);    /* Type */
-        build_append_int_noprefix(table_data, 15, 1);    /* Length */
-        build_append_int_noprefix(table_data, 1, 1);     /* Version */
-        build_append_int_noprefix(table_data, i, 4);     /* ACPI Processor ID */
+        flags = arch_ids->cpus[i].cpu ? 1 : 0;
+        build_append_int_noprefix(table_data, 17, 1);      /* Type */
+        build_append_int_noprefix(table_data, 15, 1);      /* Length */
+        build_append_int_noprefix(table_data, 1, 1);       /* Version */
+        build_append_int_noprefix(table_data, i, 4);       /* ACPI Processor ID */
         build_append_int_noprefix(table_data, arch_id, 4); /* Core ID */
-        build_append_int_noprefix(table_data, flags, 4); /* Flags */
+        build_append_int_noprefix(table_data, flags, 4);   /* Flags */
     }
 
     /* Extend I/O Interrupt Controller Structure */
-    build_append_int_noprefix(table_data, 20, 1);        /* Type */
-    build_append_int_noprefix(table_data, 13, 1);        /* Length */
-    build_append_int_noprefix(table_data, 1, 1);         /* Version */
-    build_append_int_noprefix(table_data, 3, 1);         /* Cascade */
-    build_append_int_noprefix(table_data, 0, 1);         /* Node */
-    build_append_int_noprefix(table_data, 0xffff, 8);    /* Node map */
+    build_append_int_noprefix(table_data, 20, 1);     /* Type */
+    build_append_int_noprefix(table_data, 13, 1);     /* Length */
+    build_append_int_noprefix(table_data, 1, 1);      /* Version */
+    build_append_int_noprefix(table_data, 3, 1);      /* Cascade */
+    build_append_int_noprefix(table_data, 0, 1);      /* Node */
+    build_append_int_noprefix(table_data, 0xffff, 8); /* Node map */
 
     /* MSI Interrupt Controller Structure */
-    build_append_int_noprefix(table_data, 21, 1);        /* Type */
-    build_append_int_noprefix(table_data, 19, 1);        /* Length */
-    build_append_int_noprefix(table_data, 1, 1);         /* Version */
-    build_append_int_noprefix(table_data, VIRT_PCH_MSI_ADDR_LOW, 8);/* Address */
-    build_append_int_noprefix(table_data, 0x40, 4);      /* Start */
-    build_append_int_noprefix(table_data, 0xc0, 4);      /* Count */
+    build_append_int_noprefix(table_data, 21, 1);                    /* Type */
+    build_append_int_noprefix(table_data, 19, 1);                    /* Length */
+    build_append_int_noprefix(table_data, 1, 1);                     /* Version */
+    build_append_int_noprefix(table_data, VIRT_PCH_MSI_ADDR_LOW, 8); /* Address */
+    build_append_int_noprefix(table_data, 0x40, 4);                  /* Start */
+    build_append_int_noprefix(table_data, 0xc0, 4);                  /* Count */
 
     /* Bridge I/O Interrupt Controller Structure */
-    build_append_int_noprefix(table_data, 22, 1);        /* Type */
-    build_append_int_noprefix(table_data, 17, 1);        /* Length */
-    build_append_int_noprefix(table_data, 1, 1);         /* Version */
-    build_append_int_noprefix(table_data, VIRT_PCH_REG_BASE, 8);/* Address */
-    build_append_int_noprefix(table_data, 0x1000, 2);    /* Size */
-    build_append_int_noprefix(table_data, 0, 2);         /* Id */
-    build_append_int_noprefix(table_data, 0x40, 2);      /* Base */
+    build_append_int_noprefix(table_data, 22, 1);                /* Type */
+    build_append_int_noprefix(table_data, 17, 1);                /* Length */
+    build_append_int_noprefix(table_data, 1, 1);                 /* Version */
+    build_append_int_noprefix(table_data, VIRT_PCH_REG_BASE, 8); /* Address */
+    build_append_int_noprefix(table_data, 0x1000, 2);            /* Size */
+    build_append_int_noprefix(table_data, 0, 2);                 /* Id */
+    build_append_int_noprefix(table_data, 0x40, 2);              /* Base */
 
     acpi_table_end(linker, &table);
 }
@@ -188,14 +191,14 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(machine);
     MachineClass *mc = MACHINE_GET_CLASS(lvms);
     const CPUArchIdList *arch_ids = mc->possible_cpu_arch_ids(machine);
-    AcpiTable table = { .sig = "SRAT", .rev = 1, .oem_id = lvms->oem_id,
-                        .oem_table_id = lvms->oem_table_id };
+    AcpiTable table = {.sig = "SRAT", .rev = 1, .oem_id = lvms->oem_id, .oem_table_id = lvms->oem_table_id};
 
     acpi_table_begin(&table, table_data);
     build_append_int_noprefix(table_data, 1, 4); /* Reserved */
     build_append_int_noprefix(table_data, 0, 8); /* Reserved */
 
-    for (i = 0; i < arch_ids->len; ++i) {
+    for (i = 0; i < arch_ids->len; ++i)
+    {
         arch_id = arch_ids->cpus[i].arch_id;
         node_id = arch_ids->cpus[i].props.node_id;
 
@@ -217,14 +220,19 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     gap = VIRT_LOWMEM_SIZE;
     numa_info = machine->numa_state->nodes;
     nodes = nb_numa_nodes;
-    if (!nodes) {
+    if (!nodes)
+    {
         nodes = 1;
     }
 
-    for (i = 0; i < nodes; i++) {
-        if (nb_numa_nodes) {
+    for (i = 0; i < nodes; i++)
+    {
+        if (nb_numa_nodes)
+        {
             len = numa_info[i].node_mem;
-        } else {
+        }
+        else
+        {
             len = machine->ram_size;
         }
 
@@ -233,21 +241,24 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
          *   lowram:  [base, +gap)
          *   highram: [VIRT_HIGHMEM_BASE, +(len - gap))
          */
-        if (len >= gap) {
+        if (len >= gap)
+        {
             build_srat_memory(table_data, base, gap, i, MEM_AFFINITY_ENABLED);
             len -= gap;
             base = VIRT_HIGHMEM_BASE;
             gap = machine->ram_size - VIRT_LOWMEM_SIZE;
         }
 
-        if (len) {
+        if (len)
+        {
             build_srat_memory(table_data, base, len, i, MEM_AFFINITY_ENABLED);
             base += len;
-            gap  -= len;
+            gap -= len;
         }
     }
 
-    if (machine->device_memory) {
+    if (machine->device_memory)
+    {
         build_srat_memory(table_data, machine->device_memory->base,
                           memory_region_size(&machine->device_memory->mr),
                           nodes - 1,
@@ -266,23 +277,23 @@ spcr_setup(GArray *table_data, BIOSLinker *linker, MachineState *machine)
 {
     LoongArchVirtMachineState *lvms;
     AcpiSpcrData serial = {
-        .interface_type = 0,       /* 16550 compatible */
+        .interface_type = 0, /* 16550 compatible */
         .base_addr.id = AML_AS_SYSTEM_MEMORY,
         .base_addr.width = 32,
         .base_addr.offset = 0,
         .base_addr.size = 1,
         .base_addr.addr = VIRT_UART_BASE,
-        .interrupt_type = 0,       /* Interrupt not supported */
+        .interrupt_type = 0, /* Interrupt not supported */
         .pc_interrupt = 0,
         .interrupt = VIRT_UART_IRQ,
-        .baud_rate = 7,            /* 115200 */
+        .baud_rate = 7, /* 115200 */
         .parity = 0,
         .stop_bits = 1,
         .flow_control = 0,
-        .terminal_type = 3,        /* ANSI */
-        .language = 0,             /* Language */
-        .pci_device_id = 0xffff,   /* not a PCI device*/
-        .pci_vendor_id = 0xffff,   /* not a PCI device*/
+        .terminal_type = 3,      /* ANSI */
+        .language = 0,           /* Language */
+        .pci_device_id = 0xffff, /* not a PCI device*/
+        .pci_vendor_id = 0xffff, /* not a PCI device*/
         .pci_bus = 0,
         .pci_device = 0,
         .pci_function = 0,
@@ -299,8 +310,8 @@ spcr_setup(GArray *table_data, BIOSLinker *linker, MachineState *machine)
                lvms->oem_table_id, NULL);
 }
 
-typedef
-struct AcpiBuildState {
+typedef struct AcpiBuildState
+{
     /* Copy of table in RAM (for patching). */
     MemoryRegion *table_mr;
     /* Is table patched? */
@@ -328,10 +339,10 @@ static void build_uart_device_aml(Aml *table, int index)
     aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
     crs = aml_resource_template();
     aml_append(crs,
-        aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
-                         AML_NON_CACHEABLE, AML_READ_WRITE,
-                         0, base, base + VIRT_UART_SIZE - 1,
-                         0, VIRT_UART_SIZE));
+               aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
+                                AML_NON_CACHEABLE, AML_READ_WRITE,
+                                0, base, base + VIRT_UART_SIZE - 1,
+                                0, VIRT_UART_SIZE));
     aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL, AML_ACTIVE_HIGH,
                                   AML_SHARED, &uart_irq, 1));
     aml_append(dev, aml_name_decl("_CRS", crs));
@@ -355,19 +366,21 @@ build_la_ged_aml(Aml *dsdt, MachineState *machine)
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(machine);
     CPUHotplugFeatures opts;
 
-    build_ged_aml(dsdt, "\\_SB."GED_DEVICE,
+    build_ged_aml(dsdt, "\\_SB." GED_DEVICE,
                   HOTPLUG_HANDLER(lvms->acpi_ged),
                   VIRT_SCI_IRQ, AML_SYSTEM_MEMORY,
                   VIRT_GED_EVT_ADDR);
     event = object_property_get_uint(OBJECT(lvms->acpi_ged),
                                      "ged-event", &error_abort);
-    if (event & ACPI_GED_MEM_HOTPLUG_EVT) {
+    if (event & ACPI_GED_MEM_HOTPLUG_EVT)
+    {
         build_memory_hotplug_aml(dsdt, machine->ram_slots, "\\_SB", NULL,
                                  AML_SYSTEM_MEMORY,
                                  VIRT_GED_MEM_ADDR);
     }
 
-    if (event & ACPI_GED_CPU_HOTPLUG_EVT) {
+    if (event & ACPI_GED_CPU_HOTPLUG_EVT)
+    {
         opts.acpi_1_compatible = false;
         opts.has_legacy_cphp = false;
         opts.fw_unplugs_cpu = false;
@@ -386,12 +399,12 @@ static void build_pci_device_aml(Aml *scope, LoongArchVirtMachineState *lvms)
     struct GPEXConfig cfg = {
         .mmio64.base = VIRT_PCI_MEM_BASE,
         .mmio64.size = VIRT_PCI_MEM_SIZE,
-        .pio.base    = VIRT_PCI_IO_BASE,
-        .pio.size    = VIRT_PCI_IO_SIZE,
-        .ecam.base   = VIRT_PCI_CFG_BASE,
-        .ecam.size   = VIRT_PCI_CFG_SIZE,
-        .irq         = VIRT_GSI_BASE + VIRT_DEVICE_IRQS,
-        .bus         = lvms->pci_bus,
+        .pio.base = VIRT_PCI_IO_BASE,
+        .pio.size = VIRT_PCI_IO_SIZE,
+        .ecam.base = VIRT_PCI_CFG_BASE,
+        .ecam.size = VIRT_PCI_CFG_SIZE,
+        .irq = VIRT_GSI_BASE + VIRT_DEVICE_IRQS,
+        .bus = lvms->pci_bus,
     };
 
     acpi_dsdt_add_gpex(scope, &cfg);
@@ -437,6 +450,28 @@ static void build_flash_aml(Aml *scope, LoongArchVirtMachineState *lvms)
     aml_append(scope, dev);
 }
 
+static void build_test_device_aml(Aml *scope)
+{
+    // 参考 flash 的 aml 设计
+    //
+    Aml *dev;
+    Aml *crs;
+    uint64_t base = VIRT_TEST_DEVICE_BASE;
+    uint64_t size = VIRT_TEST_DEVICE_LEN;
+
+    dev = aml_device("_TD0"); // length <= 4
+    aml_append(dev, aml_name_decl("_HID", aml_string("TESTDEV0")));
+    aml_append(dev, aml_name_decl("_UID", aml_int(0)));
+
+    crs = aml_resource_template();
+    // 地址解析方式 最小地址固定 最大地址固定 非缓存 可读可写 地址对齐粒度通常为0 起始地址 结束地址 转换偏移通常为0 大小
+    aml_append(crs, aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
+                                     AML_NON_CACHEABLE, AML_READ_WRITE,
+                                     0, base, base + size - 1, 0, size));
+    aml_append(dev, aml_name_decl("_CRS", crs));
+    aml_append(scope, dev);
+}
+
 #ifdef CONFIG_TPM
 static void acpi_dsdt_add_tpm(Aml *scope, LoongArchVirtMachineState *vms)
 {
@@ -446,7 +481,8 @@ static void acpi_dsdt_add_tpm(Aml *scope, LoongArchVirtMachineState *vms)
     MemoryRegion *sbdev_mr;
     hwaddr tpm_base;
 
-    if (!sbdev) {
+    if (!sbdev)
+    {
         return;
     }
 
@@ -479,17 +515,18 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     int i;
     Aml *dsdt, *scope, *pkg;
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(machine);
-    AcpiTable table = { .sig = "DSDT", .rev = 1, .oem_id = lvms->oem_id,
-                        .oem_table_id = lvms->oem_table_id };
+    AcpiTable table = {.sig = "DSDT", .rev = 1, .oem_id = lvms->oem_id, .oem_table_id = lvms->oem_table_id};
 
     acpi_table_begin(&table, table_data);
     dsdt = init_aml_allocator();
-    for (i = 0; i < VIRT_UART_COUNT; i++) {
+    for (i = 0; i < VIRT_UART_COUNT; i++)
+    {
         build_uart_device_aml(dsdt, i);
     }
     build_pci_device_aml(dsdt, lvms);
     build_la_ged_aml(dsdt, machine);
     build_flash_aml(dsdt, lvms);
+    build_test_device_aml(dsdt);
 #ifdef CONFIG_TPM
     acpi_dsdt_add_tpm(dsdt, lvms);
 #endif
@@ -560,13 +597,16 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
     if (machine->acpi_spcr_enabled)
         spcr_setup(tables_blob, tables->linker, machine);
 
-    if (machine->numa_state->num_nodes) {
-        if (machine->numa_state->have_numa_distance) {
+    if (machine->numa_state->num_nodes)
+    {
+        if (machine->numa_state->have_numa_distance)
+        {
             acpi_add_table(table_offsets, tables_blob);
             build_slit(tables_blob, tables->linker, machine, lvms->oem_id,
                        lvms->oem_table_id);
         }
-        if (machine->numa_state->hmat_enabled) {
+        if (machine->numa_state->hmat_enabled)
+        {
             acpi_add_table(table_offsets, tables_blob);
             build_hmat(tables_blob, tables->linker, machine->numa_state,
                        lvms->oem_id, lvms->oem_table_id);
@@ -576,8 +616,8 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
     acpi_add_table(table_offsets, tables_blob);
     {
         AcpiMcfgInfo mcfg = {
-           .base = VIRT_PCI_CFG_BASE,
-           .size = VIRT_PCI_CFG_SIZE,
+            .base = VIRT_PCI_CFG_BASE,
+            .size = VIRT_PCI_CFG_SIZE,
         };
         build_mcfg(tables_blob, tables->linker, &mcfg, lvms->oem_id,
                    lvms->oem_table_id);
@@ -585,7 +625,8 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
 
 #ifdef CONFIG_TPM
     /* TPM info */
-    if (tpm_get_version(tpm_find()) == TPM_VERSION_2_0) {
+    if (tpm_get_version(tpm_find()) == TPM_VERSION_2_0)
+    {
         acpi_add_table(table_offsets, tables_blob);
         build_tpm2(tables_blob, tables->linker,
                    tables->tcpalog, lvms->oem_id,
@@ -593,7 +634,8 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
     }
 #endif
     /* Add tables supplied by user (if any) */
-    for (u = acpi_table_first(); u; u = acpi_table_next(u)) {
+    for (u = acpi_table_first(); u; u = acpi_table_next(u))
+    {
         unsigned len = acpi_table_len(u);
 
         acpi_add_table(table_offsets, tables_blob);
@@ -620,7 +662,8 @@ static void acpi_build(AcpiBuildTables *tables, MachineState *machine)
      * The align size is 128, warn if 64k is not enough therefore
      * the align size could be resized.
      */
-    if (tables_blob->len > ACPI_BUILD_TABLE_SIZE / 2) {
+    if (tables_blob->len > ACPI_BUILD_TABLE_SIZE / 2)
+    {
         warn_report("ACPI table size %u exceeds %d bytes,"
                     " migration may not work",
                     tables_blob->len, ACPI_BUILD_TABLE_SIZE / 2);
@@ -654,7 +697,8 @@ static void acpi_build_update(void *build_opaque)
     AcpiBuildTables tables;
 
     /* No state to update or already patched? Nothing to do. */
-    if (!build_state || build_state->patched) {
+    if (!build_state || build_state->patched)
+    {
         return;
     }
     build_state->patched = 1;
@@ -680,15 +724,15 @@ static const VMStateDescription vmstate_acpi_build = {
     .name = "acpi_build",
     .version_id = 1,
     .minimum_version_id = 1,
-    .fields = (const VMStateField[]) {
+    .fields = (const VMStateField[]){
         VMSTATE_UINT8(patched, AcpiBuildState),
-        VMSTATE_END_OF_LIST()
-    },
+        VMSTATE_END_OF_LIST()},
 };
 
 static bool virt_is_acpi_enabled(LoongArchVirtMachineState *lvms)
 {
-    if (lvms->acpi == ON_OFF_AUTO_OFF) {
+    if (lvms->acpi == ON_OFF_AUTO_OFF)
+    {
         return false;
     }
     return true;
@@ -699,12 +743,14 @@ void virt_acpi_setup(LoongArchVirtMachineState *lvms)
     AcpiBuildTables tables;
     AcpiBuildState *build_state;
 
-    if (!lvms->fw_cfg) {
+    if (!lvms->fw_cfg)
+    {
         ACPI_BUILD_DPRINTF("No fw cfg. Bailing out.\n");
         return;
     }
 
-    if (!virt_is_acpi_enabled(lvms)) {
+    if (!virt_is_acpi_enabled(lvms))
+    {
         ACPI_BUILD_DPRINTF("ACPI disabled. Bailing out.\n");
         return;
     }

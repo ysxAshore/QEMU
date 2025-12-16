@@ -49,25 +49,27 @@
 #include "kvm/kvm_loongarch.h"
 
 static void virt_get_dmsi(Object *obj, Visitor *v, const char *name,
-                             void *opaque, Error **errp)
+                          void *opaque, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
     OnOffAuto dmsi = lvms->dmsi;
 
     visit_type_OnOffAuto(v, name, &dmsi, errp);
-
 }
 static void virt_set_dmsi(Object *obj, Visitor *v, const char *name,
-                              void *opaque, Error **errp)
+                          void *opaque, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
 
     visit_type_OnOffAuto(v, name, &lvms->dmsi, errp);
 
-    if (lvms->dmsi == ON_OFF_AUTO_OFF) {
+    if (lvms->dmsi == ON_OFF_AUTO_OFF)
+    {
         lvms->misc_feature &= ~BIT(IOCSRF_DMSI);
         lvms->misc_status &= ~BIT_ULL(IOCSRM_DMSI_EN);
-    } else if (lvms->dmsi == ON_OFF_AUTO_ON) {
+    }
+    else if (lvms->dmsi == ON_OFF_AUTO_ON)
+    {
         lvms->misc_feature = BIT(IOCSRF_DMSI);
     }
 }
@@ -125,7 +127,8 @@ static void virt_flash_map1(PFlashCFI01 *flash,
     hwaddr real_size = size;
 
     blk = pflash_cfi01_get_blk(flash);
-    if (blk) {
+    if (blk)
+    {
         real_size = blk_getlength(blk);
         assert(real_size && real_size <= size);
     }
@@ -157,11 +160,13 @@ static void virt_build_smbios(LoongArchVirtMachineState *lvms)
     size_t smbios_tables_len, smbios_anchor_len;
     const char *product = "QEMU Virtual Machine";
 
-    if (!lvms->fw_cfg) {
+    if (!lvms->fw_cfg)
+    {
         return;
     }
 
-    if (kvm_enabled()) {
+    if (kvm_enabled())
+    {
         product = "KVM Virtual Machine";
     }
 
@@ -172,7 +177,8 @@ static void virt_build_smbios(LoongArchVirtMachineState *lvms)
                       &smbios_tables, &smbios_tables_len,
                       &smbios_anchor, &smbios_anchor_len, &error_fatal);
 
-    if (smbios_anchor) {
+    if (smbios_anchor)
+    {
         fw_cfg_add_file(lvms->fw_cfg, "etc/smbios/smbios-tables",
                         smbios_tables, smbios_tables_len);
         fw_cfg_add_file(lvms->fw_cfg, "etc/smbios/smbios-anchor",
@@ -183,7 +189,7 @@ static void virt_build_smbios(LoongArchVirtMachineState *lvms)
 static void virt_done(Notifier *notifier, void *data)
 {
     LoongArchVirtMachineState *lvms = container_of(notifier,
-                                      LoongArchVirtMachineState, machine_done);
+                                                   LoongArchVirtMachineState, machine_done);
     virt_build_smbios(lvms);
     virt_acpi_setup(lvms);
     virt_fdt_setup(lvms);
@@ -207,7 +213,8 @@ static void memmap_add_entry(MachineState *ms, uint64_t address,
     memmap_table = lvms->memmap_table;
     memmap_entries = lvms->memmap_entries;
     /* Ensure there are no duplicate entries. */
-    for (unsigned i = 0; i < memmap_entries; i++) {
+    for (unsigned i = 0; i < memmap_entries; i++)
+    {
         assert(memmap_table[i].address != address);
     }
 
@@ -230,11 +237,13 @@ static DeviceState *create_acpi_ged(DeviceState *pch_pic,
     MachineClass *mc = MACHINE_GET_CLASS(lvms);
     uint32_t event = ACPI_GED_PWR_DOWN_EVT;
 
-    if (ms->ram_slots) {
+    if (ms->ram_slots)
+    {
         event |= ACPI_GED_MEM_HOTPLUG_EVT;
     }
 
-    if (mc->has_hotpluggable_cpus) {
+    if (mc->has_hotpluggable_cpus)
+    {
         event |= ACPI_GED_CPU_HOTPLUG_EVT;
     }
 
@@ -249,12 +258,26 @@ static DeviceState *create_acpi_ged(DeviceState *pch_pic,
     /* ged regs used for reset and power down */
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 2, VIRT_GED_REG_ADDR);
 
-    if (mc->has_hotpluggable_cpus) {
+    if (mc->has_hotpluggable_cpus)
+    {
         sysbus_mmio_map(SYS_BUS_DEVICE(dev), 3, VIRT_GED_CPUHP_ADDR);
     }
 
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
                        qdev_get_gpio_in(pch_pic, VIRT_SCI_IRQ - VIRT_GSI_BASE));
+    return dev;
+}
+
+static DeviceState *create_test_device(DeviceState *pch_pic)
+{
+    DeviceState *dev;
+
+    dev = qdev_new("test");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    /* 将设备的第0个MMIO区域 映射到 物理地址 */
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, VIRT_TEST_DEVICE_BASE);
+
     return dev;
 }
 
@@ -272,7 +295,8 @@ static DeviceState *create_platform_bus(DeviceState *pch_pic)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus = SYS_BUS_DEVICE(dev);
-    for (i = 0; i < VIRT_PLATFORM_BUS_NUM_IRQS; i++) {
+    for (i = 0; i < VIRT_PLATFORM_BUS_NUM_IRQS; i++)
+    {
         irq = VIRT_PLATFORM_BUS_IRQ - VIRT_GSI_BASE + i;
         sysbus_connect_irq(sysbus, i, qdev_get_gpio_in(pch_pic, irq));
     }
@@ -284,7 +308,7 @@ static DeviceState *create_platform_bus(DeviceState *pch_pic)
 }
 
 static void virt_devices_init(DeviceState *pch_pic,
-                                   LoongArchVirtMachineState *lvms)
+                              LoongArchVirtMachineState *lvms)
 {
     MachineClass *mc = MACHINE_GET_CLASS(lvms);
     DeviceState *gpex_dev;
@@ -324,7 +348,8 @@ static void virt_devices_init(DeviceState *pch_pic,
     memory_region_add_subregion(get_system_memory(), VIRT_PCI_IO_BASE,
                                 pio_alias);
 
-    for (i = 0; i < PCI_NUM_PINS; i++) {
+    for (i = 0; i < PCI_NUM_PINS; i++)
+    {
         sysbus_connect_irq(d, i,
                            qdev_get_gpio_in(pch_pic, 16 + i));
         gpex_set_irq_num(GPEX_HOST(gpex_dev), i, 16 + i);
@@ -334,7 +359,8 @@ static void virt_devices_init(DeviceState *pch_pic,
      * Create uart fdt node in reverse order so that they appear
      * in the finished device tree lowest address first
      */
-    for (i = VIRT_UART_COUNT; i-- > 0;) {
+    for (i = VIRT_UART_COUNT; i-- > 0;)
+    {
         hwaddr base = VIRT_UART_BASE + i * VIRT_UART_SIZE;
         int irq = VIRT_UART_IRQ + i - VIRT_GSI_BASE;
         serial_mm_init(get_system_memory(), base, 0,
@@ -352,7 +378,9 @@ static void virt_devices_init(DeviceState *pch_pic,
     create_unimplemented_device("pci-dma-cfg", 0x1001041c, 0x4);
     sysbus_create_simple("ls7a_rtc", VIRT_RTC_REG_BASE,
                          qdev_get_gpio_in(pch_pic,
-                         VIRT_RTC_IRQ - VIRT_GSI_BASE));
+                                          VIRT_RTC_IRQ - VIRT_GSI_BASE));
+
+    create_test_device(pch_pic);
 
     /* acpi ged */
     lvms->acpi_ged = create_acpi_ged(pch_pic, lvms);
@@ -370,9 +398,11 @@ static void virt_cpu_irq_init(LoongArchVirtMachineState *lvms)
 
     /* cpu nodes */
     possible_cpus = mc->possible_cpu_arch_ids(ms);
-    for (num = 0; num < possible_cpus->len; num++) {
+    for (num = 0; num < possible_cpus->len; num++)
+    {
         cs = possible_cpus->cpus[num].cpu;
-        if (cs == NULL) {
+        if (cs == NULL)
+        {
             continue;
         }
 
@@ -380,7 +410,8 @@ static void virt_cpu_irq_init(LoongArchVirtMachineState *lvms)
                              &error_abort);
         hotplug_handler_plug(HOTPLUG_HANDLER(lvms->extioi), DEVICE(cs),
                              &error_abort);
-	if (lvms->dintc) {
+        if (lvms->dintc)
+        {
             hotplug_handler_plug(HOTPLUG_HANDLER(lvms->dintc), DEVICE(cs),
                                  &error_abort);
         }
@@ -471,7 +502,8 @@ static void virt_irq_init(LoongArchVirtMachineState *lvms)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(ipi), &error_fatal);
 
     /* Create DINTC device*/
-    if (virt_has_dmsi(lvms)) {
+    if (virt_has_dmsi(lvms))
+    {
         dintc = qdev_new(TYPE_LOONGARCH_DINTC);
         lvms->dintc = dintc;
         sysbus_realize_and_unref(SYS_BUS_DEVICE(dintc), &error_fatal);
@@ -481,7 +513,8 @@ static void virt_irq_init(LoongArchVirtMachineState *lvms)
     /* Create EXTIOI device */
     extioi = qdev_new(TYPE_LOONGARCH_EXTIOI);
     lvms->extioi = extioi;
-    if (virt_is_veiointc_enabled(lvms)) {
+    if (virt_is_veiointc_enabled(lvms))
+    {
         qdev_prop_set_bit(extioi, "has-virtualization-extension", true);
     }
     sysbus_realize_and_unref(SYS_BUS_DEVICE(extioi), &error_fatal);
@@ -494,7 +527,7 @@ static void virt_irq_init(LoongArchVirtMachineState *lvms)
     sysbus_realize_and_unref(d, &error_fatal);
 
     pch_msi = qdev_new(TYPE_LOONGARCH_PCH_MSI);
-    start   =  num;
+    start = num;
     num = EXTIOI_IRQS - start;
     qdev_prop_set_uint32(pch_msi, "msi_irq_base", start);
     qdev_prop_set_uint32(pch_msi, "msi_irq_num", num);
@@ -502,34 +535,40 @@ static void virt_irq_init(LoongArchVirtMachineState *lvms)
     sysbus_realize_and_unref(d, &error_fatal);
     sysbus_mmio_map(d, 0, VIRT_PCH_MSI_ADDR_LOW);
 
-    if (kvm_irqchip_in_kernel()) {
+    if (kvm_irqchip_in_kernel())
+    {
         kvm_loongarch_init_irq_routing();
-    } else {
+    }
+    else
+    {
         /* IPI iocsr memory region */
         memory_region_add_subregion(&lvms->system_iocsr, SMP_IPI_MAILBOX,
-                       sysbus_mmio_get_region(SYS_BUS_DEVICE(ipi), 0));
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(ipi), 0));
         memory_region_add_subregion(&lvms->system_iocsr, MAIL_SEND_ADDR,
-                       sysbus_mmio_get_region(SYS_BUS_DEVICE(ipi), 1));
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(ipi), 1));
 
         /* EXTIOI iocsr memory region */
         memory_region_add_subregion(&lvms->system_iocsr, APIC_BASE,
-                    sysbus_mmio_get_region(SYS_BUS_DEVICE(extioi), 0));
-        if (virt_is_veiointc_enabled(lvms)) {
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(extioi), 0));
+        if (virt_is_veiointc_enabled(lvms))
+        {
             memory_region_add_subregion(&lvms->system_iocsr, EXTIOI_VIRT_BASE,
-                    sysbus_mmio_get_region(SYS_BUS_DEVICE(extioi), 1));
+                                        sysbus_mmio_get_region(SYS_BUS_DEVICE(extioi), 1));
         }
 
         /* PCH_PIC memory region */
         memory_region_add_subregion(get_system_memory(), VIRT_PCH_REG_BASE,
-                    sysbus_mmio_get_region(SYS_BUS_DEVICE(pch_pic), 0));
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(pch_pic), 0));
 
         /* Connect pch_pic irqs to extioi */
-        for (i = 0; i < VIRT_PCH_PIC_IRQ_NUM; i++) {
+        for (i = 0; i < VIRT_PCH_PIC_IRQ_NUM; i++)
+        {
             qdev_connect_gpio_out(DEVICE(pch_pic), i,
                                   qdev_get_gpio_in(extioi, i));
         }
 
-        for (i = VIRT_PCH_PIC_IRQ_NUM; i < EXTIOI_IRQS; i++) {
+        for (i = VIRT_PCH_PIC_IRQ_NUM; i < EXTIOI_IRQS; i++)
+        {
             /* Connect pch_msi irqs to extioi */
             qdev_connect_gpio_out(DEVICE(pch_msi), i - VIRT_PCH_PIC_IRQ_NUM,
                                   qdev_get_gpio_in(extioi, i));
@@ -549,7 +588,8 @@ static void virt_firmware_init(LoongArchVirtMachineState *lvms)
     lvms->bios_loaded = false;
 
     /* Map legacy -drive if=pflash to machine properties */
-    for (i = 0; i < ARRAY_SIZE(lvms->flash); i++) {
+    for (i = 0; i < ARRAY_SIZE(lvms->flash); i++)
+    {
         pflash_cfi01_legacy_drive(lvms->flash[i],
                                   drive_get(IF_PFLASH, 0, i));
     }
@@ -558,8 +598,10 @@ static void virt_firmware_init(LoongArchVirtMachineState *lvms)
 
     pflash_blk0 = pflash_cfi01_get_blk(lvms->flash[0]);
 
-    if (pflash_blk0) {
-        if (filename) {
+    if (pflash_blk0)
+    {
+        if (filename)
+        {
             error_report("cannot use both '-bios' and '-drive if=pflash'"
                          "options at once");
             exit(1);
@@ -568,16 +610,19 @@ static void virt_firmware_init(LoongArchVirtMachineState *lvms)
         return;
     }
 
-    if (filename) {
+    if (filename)
+    {
         bios_name = qemu_find_file(QEMU_FILE_TYPE_BIOS, filename);
-        if (!bios_name) {
+        if (!bios_name)
+        {
             error_report("Could not find ROM image '%s'", filename);
             exit(1);
         }
 
         mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(lvms->flash[0]), 0);
         bios_size = load_image_mr(bios_name, mr);
-        if (bios_size < 0) {
+        if (bios_size < 0)
+        {
             error_report("Could not load ROM image '%s'", bios_name);
             exit(1);
         }
@@ -593,27 +638,33 @@ static MemTxResult virt_iocsr_misc_write(void *opaque, hwaddr addr,
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(opaque);
     uint64_t features;
 
-    switch (addr) {
+    switch (addr)
+    {
     case MISC_FUNC_REG:
-        if (kvm_irqchip_in_kernel()) {
+        if (kvm_irqchip_in_kernel())
+        {
             return MEMTX_OK;
         }
 
-        if (!virt_is_veiointc_enabled(lvms)) {
+        if (!virt_is_veiointc_enabled(lvms))
+        {
             return MEMTX_OK;
         }
 
-        if (virt_has_dmsi(lvms) && val & BIT_ULL(IOCSRM_DMSI_EN)) {
+        if (virt_has_dmsi(lvms) && val & BIT_ULL(IOCSRM_DMSI_EN))
+        {
             lvms->misc_status |= BIT_ULL(IOCSRM_DMSI_EN);
         }
 
         features = address_space_ldl(&lvms->as_iocsr,
                                      EXTIOI_VIRT_BASE + EXTIOI_VIRT_CONFIG,
                                      attrs, NULL);
-        if (val & BIT_ULL(IOCSRM_EXTIOI_EN)) {
+        if (val & BIT_ULL(IOCSRM_EXTIOI_EN))
+        {
             features |= BIT(EXTIOI_ENABLE);
         }
-        if (val & BIT_ULL(IOCSRM_EXTIOI_INT_ENCODE)) {
+        if (val & BIT_ULL(IOCSRM_EXTIOI_INT_ENCODE))
+        {
             features |= BIT(EXTIOI_ENABLE_INT_ENCODE);
         }
 
@@ -636,16 +687,19 @@ static MemTxResult virt_iocsr_misc_read(void *opaque, hwaddr addr,
     uint64_t ret = 0;
     int features;
 
-    switch (addr) {
+    switch (addr)
+    {
     case VERSION_REG:
         ret = 0x11ULL;
         break;
     case FEATURE_REG:
         ret = BIT(IOCSRF_MSI) | BIT(IOCSRF_EXTIOI) | BIT(IOCSRF_CSRIPI);
-        if (virt_has_dmsi(lvms)) {
+        if (virt_has_dmsi(lvms))
+        {
             ret |= BIT(IOCSRF_DMSI);
         }
-        if (kvm_enabled()) {
+        if (kvm_enabled())
+        {
             ret |= BIT(IOCSRF_VM);
         }
         break;
@@ -653,14 +707,16 @@ static MemTxResult virt_iocsr_misc_read(void *opaque, hwaddr addr,
         ret = 0x6e6f73676e6f6f4cULL; /* "Loongson" */
         break;
     case CPUNAME_REG:
-        ret = 0x303030354133ULL;     /* "3A5000" */
+        ret = 0x303030354133ULL; /* "3A5000" */
         break;
     case MISC_FUNC_REG:
-        if (kvm_irqchip_in_kernel()) {
+        if (kvm_irqchip_in_kernel())
+        {
             return MEMTX_OK;
         }
 
-        if (!virt_is_veiointc_enabled(lvms)) {
+        if (!virt_is_veiointc_enabled(lvms))
+        {
             ret |= BIT_ULL(IOCSRM_EXTIOI_EN);
             break;
         }
@@ -668,14 +724,17 @@ static MemTxResult virt_iocsr_misc_read(void *opaque, hwaddr addr,
         features = address_space_ldl(&lvms->as_iocsr,
                                      EXTIOI_VIRT_BASE + EXTIOI_VIRT_CONFIG,
                                      attrs, NULL);
-        if (features & BIT(EXTIOI_ENABLE)) {
+        if (features & BIT(EXTIOI_ENABLE))
+        {
             ret |= BIT_ULL(IOCSRM_EXTIOI_EN);
         }
-        if (features & BIT(EXTIOI_ENABLE_INT_ENCODE)) {
+        if (features & BIT(EXTIOI_ENABLE_INT_ENCODE))
+        {
             ret |= BIT_ULL(IOCSRM_EXTIOI_INT_ENCODE);
         }
         if (virt_has_dmsi(lvms) &&
-            (lvms->misc_status & BIT_ULL(IOCSRM_DMSI_EN))) {
+            (lvms->misc_status & BIT_ULL(IOCSRM_DMSI_EN)))
+        {
             ret |= BIT_ULL(IOCSRM_DMSI_EN);
         }
         break;
@@ -688,7 +747,7 @@ static MemTxResult virt_iocsr_misc_read(void *opaque, hwaddr addr,
 }
 
 static const MemoryRegionOps virt_iocsr_misc_ops = {
-    .read_with_attrs  = virt_iocsr_misc_read,
+    .read_with_attrs = virt_iocsr_misc_read,
     .write_with_attrs = virt_iocsr_misc_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
@@ -712,34 +771,42 @@ static void fw_cfg_add_memory(MachineState *ms)
     gap = VIRT_LOWMEM_SIZE;
     nodes = nb_numa_nodes = ms->numa_state->num_nodes;
     numa_info = ms->numa_state->nodes;
-    if (!nodes) {
+    if (!nodes)
+    {
         nodes = 1;
     }
 
     /* add fw_cfg memory map of node0 */
-    if (nb_numa_nodes) {
+    if (nb_numa_nodes)
+    {
         size = numa_info[0].node_mem;
-    } else {
+    }
+    else
+    {
         size = ram_size;
     }
 
-    if (size >= gap) {
+    if (size >= gap)
+    {
         memmap_add_entry(ms, base, gap, 1);
         size -= gap;
         base = VIRT_HIGHMEM_BASE;
     }
 
-    if (size) {
+    if (size)
+    {
         memmap_add_entry(ms, base, size, 1);
         base += size;
     }
 
-    if (nodes < 2) {
+    if (nodes < 2)
+    {
         return;
     }
 
     /* add fw_cfg memory map of other nodes */
-    if (numa_info[0].node_mem < gap && ram_size > gap) {
+    if (numa_info[0].node_mem < gap && ram_size > gap)
+    {
         /*
          * memory map for the maining nodes splited into two part
          * lowram:  [base, +(gap - numa_info[0].node_mem))
@@ -748,11 +815,14 @@ static void fw_cfg_add_memory(MachineState *ms)
         memmap_add_entry(ms, base, gap - numa_info[0].node_mem, 1);
         size = ram_size - gap;
         base = VIRT_HIGHMEM_BASE;
-    } else {
+    }
+    else
+    {
         size = ram_size - numa_info[0].node_mem;
     }
 
-    if (size) {
+    if (size)
+    {
         memmap_add_entry(ms, base, size, 1);
     }
 }
@@ -763,13 +833,16 @@ static void virt_check_dmsi(MachineState *machine)
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(machine);
 
     cpu = LOONGARCH_CPU(first_cpu);
-    if (lvms->dmsi == ON_OFF_AUTO_AUTO) {
-        if (cpu->msgint != ON_OFF_AUTO_OFF) {
+    if (lvms->dmsi == ON_OFF_AUTO_AUTO)
+    {
+        if (cpu->msgint != ON_OFF_AUTO_OFF)
+        {
             lvms->misc_feature = BIT(IOCSRF_DMSI);
         }
     }
 
-    if (lvms->dmsi == ON_OFF_AUTO_ON && cpu->msgint == ON_OFF_AUTO_OFF) {
+    if (lvms->dmsi == ON_OFF_AUTO_ON && cpu->msgint == ON_OFF_AUTO_OFF)
+    {
         error_report("Fail to enable dmsi , cpu msgint is off "
                      "pleass add cpu feature mesgint=on.");
         exit(EXIT_FAILURE);
@@ -786,7 +859,8 @@ static void virt_init(MachineState *machine)
     MachineClass *mc = MACHINE_GET_CLASS(machine);
     Object *cpuobj;
 
-    if (!cpu_model) {
+    if (!cpu_model)
+    {
         cpu_model = LOONGARCH_CPU_TYPE_NAME("la464");
     }
 
@@ -801,9 +875,11 @@ static void virt_init(MachineState *machine)
 
     /* Init CPUs */
     mc->possible_cpu_arch_ids(machine);
-    for (i = 0; i < machine->smp.cpus; i++) {
+    for (i = 0; i < machine->smp.cpus; i++)
+    {
         cpuobj = object_new(machine->cpu_type);
-        if (cpuobj == NULL) {
+        if (cpuobj == NULL)
+        {
             error_report("Fail to create object with type %s ",
                          machine->cpu_type);
             exit(EXIT_FAILURE);
@@ -816,36 +892,42 @@ static void virt_init(MachineState *machine)
     /* Node0 memory */
     size = ram_size;
     base = VIRT_LOWMEM_BASE;
-    if (size > VIRT_LOWMEM_SIZE) {
+    if (size > VIRT_LOWMEM_SIZE)
+    {
         size = VIRT_LOWMEM_SIZE;
     }
 
     memory_region_init_alias(&lvms->lowmem, NULL, "loongarch.lowram",
-                              machine->ram, base, size);
+                             machine->ram, base, size);
     memory_region_add_subregion(address_space_mem, base, &lvms->lowmem);
     base += size;
-    if (ram_size - size) {
+    if (ram_size - size)
+    {
         base = VIRT_HIGHMEM_BASE;
         memory_region_init_alias(&lvms->highmem, NULL, "loongarch.highram",
-                machine->ram, VIRT_LOWMEM_BASE + size, ram_size - size);
+                                 machine->ram, VIRT_LOWMEM_BASE + size, ram_size - size);
         memory_region_add_subregion(address_space_mem, base, &lvms->highmem);
         base += ram_size - size;
     }
 
     /* initialize device memory address space */
-    if (machine->ram_size < machine->maxram_size) {
+    if (machine->ram_size < machine->maxram_size)
+    {
         ram_addr_t device_mem_size = machine->maxram_size - machine->ram_size;
 
-        if (machine->ram_slots > ACPI_MAX_RAM_SLOTS) {
-            error_report("unsupported amount of memory slots: %"PRIu64,
+        if (machine->ram_slots > ACPI_MAX_RAM_SLOTS)
+        {
+            error_report("unsupported amount of memory slots: %" PRIu64,
                          machine->ram_slots);
             exit(EXIT_FAILURE);
         }
 
         if (QEMU_ALIGN_UP(machine->maxram_size,
-                          TARGET_PAGE_SIZE) != machine->maxram_size) {
+                          TARGET_PAGE_SIZE) != machine->maxram_size)
+        {
             error_report("maximum memory size must by aligned to multiple of "
-                         "%d bytes", TARGET_PAGE_SIZE);
+                         "%d bytes",
+                         TARGET_PAGE_SIZE);
             exit(EXIT_FAILURE);
         }
         machine_memory_devices_init(machine, base, device_mem_size);
@@ -857,7 +939,8 @@ static void virt_init(MachineState *machine)
     /* fw_cfg init */
     lvms->fw_cfg = virt_fw_cfg_init(ram_size, machine);
     rom_set_fw(lvms->fw_cfg);
-    if (lvms->fw_cfg != NULL) {
+    if (lvms->fw_cfg != NULL)
+    {
         fw_cfg_add_file(lvms->fw_cfg, "etc/memmap",
                         lvms->memmap_table,
                         sizeof(struct memmap_entry) * lvms->memmap_entries);
@@ -867,7 +950,7 @@ static void virt_init(MachineState *machine)
     virt_irq_init(lvms);
     lvms->machine_done.notify = virt_done;
     qemu_add_machine_init_done_notifier(&lvms->machine_done);
-     /* connect powerdown request */
+    /* connect powerdown request */
     lvms->powerdown_notifier.notify = virt_powerdown_req;
     qemu_register_powerdown_notifier(&lvms->powerdown_notifier);
 
@@ -885,7 +968,7 @@ static void virt_get_acpi(Object *obj, Visitor *v, const char *name,
 }
 
 static void virt_set_acpi(Object *obj, Visitor *v, const char *name,
-                               void *opaque, Error **errp)
+                          void *opaque, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
 
@@ -904,7 +987,8 @@ static void virt_set_oem_id(Object *obj, const char *value, Error **errp)
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
     size_t len = strlen(value);
 
-    if (len > 6) {
+    if (len > 6)
+    {
         error_setg(errp,
                    "User specified oem-id value is bigger than 6 bytes in size");
         return;
@@ -926,7 +1010,8 @@ static void virt_set_oem_table_id(Object *obj, const char *value,
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
     size_t len = strlen(value);
 
-    if (len > 8) {
+    if (len > 8)
+    {
         error_setg(errp,
                    "User specified oem-table-id value is bigger than 8 bytes in size");
         return;
@@ -938,7 +1023,8 @@ static void virt_initfn(Object *obj)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(obj);
 
-    if (tcg_enabled()) {
+    if (tcg_enabled())
+    {
         lvms->veiointc = ON_OFF_AUTO_OFF;
     }
 
@@ -979,9 +1065,11 @@ static int virt_get_arch_id_from_topo(MachineState *ms, LoongArchCPUTopo *topo)
     threads = topo_align_up(ms->smp.threads);
     cores = topo_align_up(ms->smp.cores);
     sockets = topo_align_up(ms->smp.sockets);
-    if ((threads * cores * sockets) > 256) {
+    if ((threads * cores * sockets) > 256)
+    {
         error_report("Exceeding max cpuid 256 with sockets[%d] cores[%d]"
-                     " threads[%d]", ms->smp.sockets, ms->smp.cores,
+                     " threads[%d]",
+                     ms->smp.sockets, ms->smp.cores,
                      ms->smp.threads);
         exit(1);
     }
@@ -995,8 +1083,10 @@ static int virt_get_arch_id_from_topo(MachineState *ms, LoongArchCPUTopo *topo)
 static CPUArchId *virt_find_cpu_slot(MachineState *ms, int arch_id)
 {
     int n;
-    for (n = 0; n < ms->possible_cpus->len; n++) {
-        if (ms->possible_cpus->cpus[n].arch_id == arch_id) {
+    for (n = 0; n < ms->possible_cpus->len; n++)
+    {
+        if (ms->possible_cpus->cpus[n].arch_id == arch_id)
+        {
             return &ms->possible_cpus->cpus[n];
         }
     }
@@ -1008,8 +1098,10 @@ static CPUArchId *virt_find_cpu_slot(MachineState *ms, int arch_id)
 static CPUArchId *virt_find_empty_cpu_slot(MachineState *ms)
 {
     int n;
-    for (n = 0; n < ms->possible_cpus->len; n++) {
-        if (ms->possible_cpus->cpus[n].cpu == NULL) {
+    for (n = 0; n < ms->possible_cpus->len; n++)
+    {
+        if (ms->possible_cpus->cpus[n].cpu == NULL)
+        {
             return &ms->possible_cpus->cpus[n];
         }
     }
@@ -1028,22 +1120,26 @@ static void virt_cpu_pre_plug(HotplugHandler *hotplug_dev,
     LoongArchCPUTopo topo;
     int arch_id;
 
-    if (lvms->acpi_ged) {
-        if ((cpu->thread_id < 0) || (cpu->thread_id >= ms->smp.threads)) {
+    if (lvms->acpi_ged)
+    {
+        if ((cpu->thread_id < 0) || (cpu->thread_id >= ms->smp.threads))
+        {
             error_setg(errp,
                        "Invalid thread-id %u specified, must be in range 1:%u",
                        cpu->thread_id, ms->smp.threads - 1);
             return;
         }
 
-        if ((cpu->core_id < 0) || (cpu->core_id >= ms->smp.cores)) {
+        if ((cpu->core_id < 0) || (cpu->core_id >= ms->smp.cores))
+        {
             error_setg(errp,
                        "Invalid core-id %u specified, must be in range 1:%u",
                        cpu->core_id, ms->smp.cores - 1);
             return;
         }
 
-        if ((cpu->socket_id < 0) || (cpu->socket_id >= ms->smp.sockets)) {
+        if ((cpu->socket_id < 0) || (cpu->socket_id >= ms->smp.sockets))
+        {
             error_setg(errp,
                        "Invalid socket-id %u specified, must be in range 1:%u",
                        cpu->socket_id, ms->smp.sockets - 1);
@@ -1053,16 +1149,19 @@ static void virt_cpu_pre_plug(HotplugHandler *hotplug_dev,
         topo.socket_id = cpu->socket_id;
         topo.core_id = cpu->core_id;
         topo.thread_id = cpu->thread_id;
-        arch_id =  virt_get_arch_id_from_topo(ms, &topo);
+        arch_id = virt_get_arch_id_from_topo(ms, &topo);
         cpu_slot = virt_find_cpu_slot(ms, arch_id);
-        if (CPU(cpu_slot->cpu)) {
+        if (CPU(cpu_slot->cpu))
+        {
             error_setg(errp,
                        "cpu(id%d=%d:%d:%d) with arch-id %" PRIu64 " exists",
                        cs->cpu_index, cpu->socket_id, cpu->core_id,
                        cpu->thread_id, cpu_slot->arch_id);
             return;
         }
-    } else {
+    }
+    else
+    {
         /* For cold-add cpu, find empty cpu slot */
         cpu_slot = virt_find_empty_cpu_slot(ms);
         topo.socket_id = cpu_slot->props.socket_id;
@@ -1086,7 +1185,8 @@ static void virt_cpu_unplug_request(HotplugHandler *hotplug_dev,
     LoongArchCPU *cpu = LOONGARCH_CPU(dev);
     CPUState *cs = CPU(dev);
 
-    if (cs->cpu_index == 0) {
+    if (cs->cpu_index == 0)
+    {
         error_setg(errp, "hot-unplug of boot cpu(id%d=%d:%d:%d) not supported",
                    cs->cpu_index, cpu->socket_id,
                    cpu->core_id, cpu->thread_id);
@@ -1106,7 +1206,8 @@ static void virt_cpu_unplug(HotplugHandler *hotplug_dev,
     /* Notify ipi and extioi irqchip to remove interrupt routing to CPU */
     hotplug_handler_unplug(HOTPLUG_HANDLER(lvms->ipi), dev, &error_abort);
     hotplug_handler_unplug(HOTPLUG_HANDLER(lvms->extioi), dev, &error_abort);
-    if (lvms->dintc) {
+    if (lvms->dintc)
+    {
         hotplug_handler_unplug(HOTPLUG_HANDLER(lvms->dintc), dev, &error_abort);
     }
 
@@ -1125,19 +1226,23 @@ static void virt_cpu_plug(HotplugHandler *hotplug_dev,
     LoongArchCPU *cpu = LOONGARCH_CPU(dev);
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
-    if (lvms->ipi) {
+    if (lvms->ipi)
+    {
         hotplug_handler_plug(HOTPLUG_HANDLER(lvms->ipi), dev, &error_abort);
     }
 
-    if (lvms->extioi) {
+    if (lvms->extioi)
+    {
         hotplug_handler_plug(HOTPLUG_HANDLER(lvms->extioi), dev, &error_abort);
     }
 
-    if (lvms->dintc) {
+    if (lvms->dintc)
+    {
         hotplug_handler_plug(HOTPLUG_HANDLER(lvms->dintc), dev, &error_abort);
     }
 
-    if (lvms->acpi_ged) {
+    if (lvms->acpi_ged)
+    {
         hotplug_handler_plug(HOTPLUG_HANDLER(lvms->acpi_ged), dev,
                              &error_abort);
     }
@@ -1155,23 +1260,26 @@ static bool memhp_type_supported(DeviceState *dev)
 }
 
 static void virt_mem_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
-                                 Error **errp)
+                              Error **errp)
 {
     pc_dimm_pre_plug(PC_DIMM(dev), MACHINE(hotplug_dev), errp);
 }
 
 static void virt_device_pre_plug(HotplugHandler *hotplug_dev,
-                                            DeviceState *dev, Error **errp)
+                                 DeviceState *dev, Error **errp)
 {
-    if (memhp_type_supported(dev)) {
+    if (memhp_type_supported(dev))
+    {
         virt_mem_pre_plug(hotplug_dev, dev, errp);
-    } else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU)) {
+    }
+    else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU))
+    {
         virt_cpu_pre_plug(hotplug_dev, dev, errp);
     }
 }
 
 static void virt_mem_unplug_request(HotplugHandler *hotplug_dev,
-                                     DeviceState *dev, Error **errp)
+                                    DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1181,17 +1289,20 @@ static void virt_mem_unplug_request(HotplugHandler *hotplug_dev,
 }
 
 static void virt_device_unplug_request(HotplugHandler *hotplug_dev,
-                                          DeviceState *dev, Error **errp)
+                                       DeviceState *dev, Error **errp)
 {
-    if (memhp_type_supported(dev)) {
+    if (memhp_type_supported(dev))
+    {
         virt_mem_unplug_request(hotplug_dev, dev, errp);
-    } else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU)) {
+    }
+    else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU))
+    {
         virt_cpu_unplug_request(hotplug_dev, dev, errp);
     }
 }
 
 static void virt_mem_unplug(HotplugHandler *hotplug_dev,
-                             DeviceState *dev, Error **errp)
+                            DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1201,17 +1312,20 @@ static void virt_mem_unplug(HotplugHandler *hotplug_dev,
 }
 
 static void virt_device_unplug(HotplugHandler *hotplug_dev,
-                                          DeviceState *dev, Error **errp)
+                               DeviceState *dev, Error **errp)
 {
-    if (memhp_type_supported(dev)) {
+    if (memhp_type_supported(dev))
+    {
         virt_mem_unplug(hotplug_dev, dev, errp);
-    } else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU)) {
+    }
+    else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU))
+    {
         virt_cpu_unplug(hotplug_dev, dev, errp);
     }
 }
 
 static void virt_mem_plug(HotplugHandler *hotplug_dev,
-                             DeviceState *dev, Error **errp)
+                          DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1221,20 +1335,26 @@ static void virt_mem_plug(HotplugHandler *hotplug_dev,
 }
 
 static void virt_device_plug_cb(HotplugHandler *hotplug_dev,
-                                        DeviceState *dev, Error **errp)
+                                DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
     MachineClass *mc = MACHINE_GET_CLASS(lvms);
     PlatformBusDevice *pbus;
 
-    if (device_is_dynamic_sysbus(mc, dev)) {
-        if (lvms->platform_bus_dev) {
+    if (device_is_dynamic_sysbus(mc, dev))
+    {
+        if (lvms->platform_bus_dev)
+        {
             pbus = PLATFORM_BUS_DEVICE(lvms->platform_bus_dev);
             platform_bus_link_device(pbus, SYS_BUS_DEVICE(dev));
         }
-    } else if (memhp_type_supported(dev)) {
+    }
+    else if (memhp_type_supported(dev))
+    {
         virt_mem_plug(hotplug_dev, dev, errp);
-    } else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU)) {
+    }
+    else if (object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU))
+    {
         virt_cpu_plug(hotplug_dev, dev, errp);
     }
 }
@@ -1247,7 +1367,8 @@ static HotplugHandler *virt_get_hotplug_handler(MachineState *machine,
     if (device_is_dynamic_sysbus(mc, dev) ||
         object_dynamic_cast(OBJECT(dev), TYPE_LOONGARCH_CPU) ||
         object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_IOMMU_PCI) ||
-        memhp_type_supported(dev)) {
+        memhp_type_supported(dev))
+    {
         return HOTPLUG_HANDLER(machine);
     }
     return NULL;
@@ -1259,7 +1380,8 @@ static const CPUArchIdList *virt_possible_cpu_arch_ids(MachineState *ms)
     unsigned int max_cpus = ms->smp.max_cpus;
     LoongArchCPUTopo topo;
 
-    if (ms->possible_cpus) {
+    if (ms->possible_cpus)
+    {
         assert(ms->possible_cpus->len == max_cpus);
         return ms->possible_cpus;
     }
@@ -1267,7 +1389,8 @@ static const CPUArchIdList *virt_possible_cpu_arch_ids(MachineState *ms)
     ms->possible_cpus = g_malloc0(sizeof(CPUArchIdList) +
                                   sizeof(CPUArchId) * max_cpus);
     ms->possible_cpus->len = max_cpus;
-    for (n = 0; n < ms->possible_cpus->len; n++) {
+    for (n = 0; n < ms->possible_cpus->len; n++)
+    {
         virt_get_topo_from_index(ms, &topo, n);
         arch_id = virt_get_arch_id_from_topo(ms, &topo);
         ms->possible_cpus->cpus[n].type = ms->cpu_type;
@@ -1297,10 +1420,13 @@ static int64_t virt_get_default_cpu_node_id(const MachineState *ms, int idx)
 {
     int64_t socket_id;
 
-    if (ms->numa_state->num_nodes) {
+    if (ms->numa_state->num_nodes)
+    {
         socket_id = ms->possible_cpus->cpus[idx].props.socket_id;
         return socket_id % ms->numa_state->num_nodes;
-    } else {
+    }
+    else
+    {
         return 0;
     }
 }
@@ -1335,19 +1461,19 @@ static void virt_class_init(ObjectClass *oc, const void *data)
     hc->unplug = virt_device_unplug;
 
     object_class_property_add(oc, "acpi", "OnOffAuto",
-        virt_get_acpi, virt_set_acpi,
-        NULL, NULL);
+                              virt_get_acpi, virt_set_acpi,
+                              NULL, NULL);
     object_class_property_set_description(oc, "acpi",
-        "Enable ACPI");
+                                          "Enable ACPI");
     object_class_property_add(oc, "v-eiointc", "OnOffAuto",
-        virt_get_veiointc, virt_set_veiointc,
-        NULL, NULL);
+                              virt_get_veiointc, virt_set_veiointc,
+                              NULL, NULL);
     object_class_property_set_description(oc, "v-eiointc",
-                            "Enable Virt Extend I/O Interrupt Controller.");
+                                          "Enable Virt Extend I/O Interrupt Controller.");
     object_class_property_add(oc, "dmsi", "OnOffAuto",
-        virt_get_dmsi, virt_set_dmsi, NULL, NULL);
+                              virt_get_dmsi, virt_set_dmsi, NULL, NULL);
     object_class_property_set_description(oc, "dmsi",
-                            "Enable direct Message-interrupts Controller.");
+                                          "Enable direct Message-interrupts Controller.");
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_UEFI_VARS_SYSBUS);
 #ifdef CONFIG_TPM
@@ -1361,7 +1487,6 @@ static void virt_class_init(ObjectClass *oc, const void *data)
                                           "in ACPI table header."
                                           "The string may be up to 6 bytes in size");
 
-
     object_class_property_add_str(oc, "x-oem-table-id",
                                   virt_get_oem_table_id,
                                   virt_set_oem_table_id);
@@ -1373,16 +1498,14 @@ static void virt_class_init(ObjectClass *oc, const void *data)
 
 static const TypeInfo virt_machine_types[] = {
     {
-        .name           = TYPE_LOONGARCH_VIRT_MACHINE,
-        .parent         = TYPE_MACHINE,
-        .instance_size  = sizeof(LoongArchVirtMachineState),
-        .class_init     = virt_class_init,
-        .instance_init  = virt_initfn,
-        .interfaces = (const InterfaceInfo[]) {
-         { TYPE_HOTPLUG_HANDLER },
-         { }
-        },
-    }
-};
+        .name = TYPE_LOONGARCH_VIRT_MACHINE,
+        .parent = TYPE_MACHINE,
+        .instance_size = sizeof(LoongArchVirtMachineState),
+        .class_init = virt_class_init,
+        .instance_init = virt_initfn,
+        .interfaces = (const InterfaceInfo[]){
+            {TYPE_HOTPLUG_HANDLER},
+            {}},
+    }};
 
 DEFINE_TYPES(virt_machine_types)
