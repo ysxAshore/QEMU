@@ -13,7 +13,8 @@ DECLARE_INSTANCE_CHECKER(TestState_t, TEST, TYPE_SYSBUS_TEST_DEV)
 
 // reg define
 #define REG_CHIP_ID 0x0
-#define REG_RESET 0x8
+#define REG_RESET 0x4
+#define REG_ACCESS_VA 0x8
 #define REG_BUFFER_START 0x10
 #define REG_BUFFER_END 0x100
 
@@ -25,46 +26,128 @@ struct TestState
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     uint64_t chip_id;
-    unsigned char buffer[REG_BUFFER_END - REG_BUFFER_START];
+    unsigned char buffer[REG_BUFFER_END - REG_ACCESS_VA];
 };
 
 static void reset_buffer(TestState_t *s)
 {
+    *(uint64_t *)((uintptr_t)s->buffer + REG_ACCESS_VA) = 0;
     for (int i = REG_BUFFER_START; i < REG_BUFFER_END; ++i)
-        s->buffer[i - REG_BUFFER_START] = 0x5a;
+        s->buffer[i - REG_ACCESS_VA] = 0x5a;
+}
+
+static hwaddr vaddr2hwaddr(uintptr_t vaddr)
+{
+    CPUState *cpu = qemu_get_cpu(0);
+    hwaddr ha = cpu_get_phys_page_debug(cpu, vaddr & TARGET_PAGE_MASK) | (vaddr & ~TARGET_PAGE_MASK);
+    return ha;
 }
 
 static uint64_t test_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    printf("read\n");
     TestState_t *s = opaque;
-    if (addr < REG_CHIP_ID + 0x4)
-        return (CHIP_ID >> addr * 8) & 0xff;
-    else if (addr >= REG_BUFFER_START && addr < REG_BUFFER_END)
-        return s->buffer[addr - REG_BUFFER_START];
-    else
+    uint64_t ret = 0;
+
+    if (size != 1 && size != 2 && size != 4 && size != 8)
     {
-        printf("unsupported read addr %lx size %x\n", addr, size);
+        printf("unsupported read size %x (addr %lx)\n", size, addr);
         return 0;
     }
+
+    if (addr % size != 0)
+    {
+        printf("warning: unaligned read addr %lx (size %x)\n", addr, size);
+        return 0;
+    }
+
+    if (addr + size <= REG_RESET)
+    {
+        // read chip_id
+        for (int i = 0; i < size; ++i)
+        {
+            hwaddr chip_addr = addr + i;
+            uint8_t byte = (CHIP_ID >> ((REG_RESET - 1 - chip_addr) * 8)) & 0xFF;
+            ret = (ret << 8) | byte;
+        }
+    }
+    else if (addr >= REG_ACCESS_VA && addr + size <= REG_BUFFER_START)
+    {
+        // read guest vaddr
+        uint64_t va = *(uint64_t *)((uintptr_t)s->buffer);
+        printf("the vaddr is %lx, ", va);
+        hwaddr ha = vaddr2hwaddr(va);
+        printf("the hwaddr is %lx\n", ha);
+        uint64_t value = 0;
+        if (ha != (uint64_t)-1)
+        {
+            MemTxResult res = address_space_read(&address_space_memory, ha, MEMTXATTRS_UNSPECIFIED, &value, 8);
+            if (res == MEMTX_OK)
+                printf("the data is %lx\n", value);
+            else
+                printf("address space read failed\n");
+        }
+        else
+            printf("vaddr to hwaddr is failed\n");
+        for (int i = 0; i < size; ++i)
+        {
+            int shift = ((addr - REG_ACCESS_VA + i) * 8);
+            uint8_t byte = (value >> shift) & 0xFF;
+            ret = ((uint64_t)byte << shift) | ret;
+        }
+    }
+    else if (addr >= REG_BUFFER_START && addr + size <= REG_BUFFER_END)
+    {
+        // read buffer
+        for (int i = size - 1; i >= 0; --i)
+        {
+            hwaddr buf_idx = addr - REG_ACCESS_VA + i;
+            ret = (ret << 8) | s->buffer[buf_idx];
+        }
+    }
+    else
+    {
+        printf("unsupported read addr %lx size %x (out of range)\n", addr, size);
+        return 0;
+    }
+
+    return ret;
 }
 
 static void test_write(void *opaque, hwaddr addr, uint64_t val, unsigned width)
 {
     TestState_t *s = opaque;
-    switch (addr)
+
+    if (width != 1 && width != 2 && width != 4 && width != 8)
     {
-    case REG_CHIP_ID:
-        break;
-    case REG_RESET:
-        reset_buffer(s);
-        break;
-    default:
-        if (addr >= REG_BUFFER_START && addr < REG_BUFFER_END)
-            s->buffer[addr - REG_BUFFER_START] = (unsigned char)val;
-        else
-            printf("unsupported read write %lx value %lx width %x\n", addr, val, width);
+        printf("unsupported read size %x (addr %lx)\n", width, addr);
+        return;
     }
+
+    if (addr + width > REG_BUFFER_END)
+    {
+        printf("write out of range: addr %lx + width %x > REG_BUFFER_END %lx\n",
+               addr, width, (hwaddr)REG_BUFFER_END);
+        return;
+    }
+
+    if (addr % width != 0)
+    {
+        printf("warning: unaligned write addr %lx (width %x)\n", addr, width);
+        return;
+    }
+
+    printf("write %lx value %lx width %x\n", addr, val, width);
+    if (addr == REG_RESET)
+        reset_buffer(s);
+    else if (addr >= REG_ACCESS_VA && addr + width <= REG_BUFFER_END)
+        for (int i = 0; i < width; ++i)
+        {
+            hwaddr buf_idx = addr - REG_ACCESS_VA + i;
+            uint8_t byte = (val >> (i * 8)) & 0xff;
+            s->buffer[buf_idx] = byte;
+        }
+    else
+        printf("unsupported write %lx value %lx width %x\n", addr, val, width);
 }
 
 static const MemoryRegionOps test_ops = {
