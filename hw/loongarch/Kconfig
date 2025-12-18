@@ -26,3 +26,4 @@ config LOONGARCH_VIRT
     select PFLASH_CFI01
     select ACPI_HMAT
     select TEST_DEVICE
+	select EDU
