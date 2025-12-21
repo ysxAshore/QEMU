@@ -164,3 +164,6 @@ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
 
 # TEST device
 system_ss.add(when: 'CONFIG_TEST_DEVICE', if_true: files('test_device.c'))
+
+# HWGC device
+system_ss.add(when: 'CONFIG_HWGC', if_true: files('hwgc.c'))

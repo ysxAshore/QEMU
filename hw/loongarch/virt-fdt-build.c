@@ -556,7 +556,7 @@ void virt_fdt_setup(LoongArchVirtMachineState *lvms)
     }
 
     fdt_add_rtc_node(lvms, &pch_pic_phandle);
-    fdt_add_test_device_node(lvms, &pch_pic_phandle);
+    // fdt_add_test_device_node(lvms, &pch_pic_phandle);
     fdt_add_ged_reset(lvms);
     platform_bus_add_all_fdt_nodes(machine->fdt, "/platic",
                                    VIRT_PLATFORM_BUS_BASEADDRESS,

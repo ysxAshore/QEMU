@@ -377,7 +377,6 @@ static void *edu_fact_thread(void *opaque)
         if (qatomic_read(&edu->status) & EDU_STATUS_IRQFACT)
         {
             bql_lock(); // 确保可以在非主线程中调用主线程函数(pci_set_irq, msi_notify)
-            printf("raise irq\n");
             edu_raise_irq(edu, FACT_IRQ);
             bql_unlock();
         }

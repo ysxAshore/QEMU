@@ -380,7 +380,7 @@ static void virt_devices_init(DeviceState *pch_pic,
                          qdev_get_gpio_in(pch_pic,
                                           VIRT_RTC_IRQ - VIRT_GSI_BASE));
 
-    create_test_device(pch_pic);
+    // create_test_device(pch_pic);
 
     /* acpi ged */
     lvms->acpi_ged = create_acpi_ged(pch_pic, lvms);

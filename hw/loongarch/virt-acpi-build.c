@@ -526,7 +526,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     build_pci_device_aml(dsdt, lvms);
     build_la_ged_aml(dsdt, machine);
     build_flash_aml(dsdt, lvms);
-    build_test_device_aml(dsdt);
+    // build_test_device_aml(dsdt);
 #ifdef CONFIG_TPM
     acpi_dsdt_add_tpm(dsdt, lvms);
 #endif
