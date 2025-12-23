@@ -23,7 +23,8 @@ struct HWGCState
     struct HWGCSoftCallParameter softPars;
     uint64_t soft_res;
     enum HWGC_EXEC_STEP current;
-    enum HWGC_EXEC_STEP prev;
+    enum HWGC_EXEC_STEP previous;
+    enum HWGC_EXEC_STEP done_to;
 };
 
 static uint64_t get_device_id(HWGCState *s) { return HWGC_DEVICE_ID; }
@@ -40,22 +41,54 @@ static hwaddr vaddr2hwaddr(uintptr_t vaddr)
     hwaddr ha = cpu_get_phys_page_debug(cpu, vaddr & TARGET_PAGE_MASK) | (vaddr & ~TARGET_PAGE_MASK);
     return ha;
 }
-static int accessHWAddr(uintptr_t va, uint64_t *value, int size)
+static int readHWAddr(uintptr_t va, void *value, int size)
 {
     hwaddr ha = vaddr2hwaddr(va);
-    if (ha != -1)
-    {
-        MemTxResult res = address_space_read(&address_space_memory, ha, MEMTXATTRS_UNSPECIFIED, value, 4);
-        if (res == MEMTX_OK)
-            printf("the data is %lx\n", *value);
-        else
-            printf("address space read failed\n");
-    }
-    else
+    if (ha == (hwaddr)-1)
     {
         printf("vaddr to hwaddr is failed\n");
         return -1;
     }
+
+    uint8_t buf[8] = {0};
+    MemTxResult res = address_space_read(&address_space_memory, ha, MEMTXATTRS_UNSPECIFIED, buf, size);
+    if (res != MEMTX_OK)
+    {
+        printf("address space read failed\n");
+        return -1;
+    }
+    memcpy(value, buf, size);
+
+    // debug
+    uint64_t print_value;
+    memcpy(&print_value, buf, size);
+
+    printf("read data (size=%d): 0x%lx\n", size, print_value);
+    return 0;
+}
+static int writeHWAddr(uintptr_t va, void *value, int size)
+{
+    hwaddr ha = vaddr2hwaddr(va);
+    if (ha == (hwaddr)-1)
+    {
+        printf("vaddr to hwaddr is failed\n");
+        return -1;
+    }
+
+    uint8_t buf[8] = {0};
+    memcpy(buf, value, size);
+    MemTxResult res = address_space_write(&address_space_memory, ha, MEMTXATTRS_UNSPECIFIED, buf, size);
+    if (res != MEMTX_OK)
+    {
+        printf("address space write failed\n");
+        return -1;
+    }
+
+    // debug
+    uint64_t print_value;
+    memcpy(&print_value, buf, size);
+    printf("wrote data (size=%d): 0x%lx\n", size, print_value);
+    return 0;
 }
 
 // PCI/PCIe 支持两种中断机制
@@ -146,27 +179,28 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
     }
 
     qemu_mutex_lock(&hwgc->thr_mutex);
-    if (addr >= REG_PAR0 && addr <= REG_PAR13)
+    if (addr >= REG_PAR0 && addr <= REG_PAR14)
     {
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_COMPUTING || size != 8)
             return;
         static const size_t par_offsets[] = {
-            offsetof(struct HWGCParameter, chunkSize),                       // REG_PAR0: lo=chunkSize, hi=ageThreshold
-            offsetof(struct HWGCParameter, heapRegionBias),                  // REG_PAR1: lo=heapRegionBias, hi=regionAttrShiftBy
-            offsetof(struct HWGCParameter, heapRegionShiftBy),               // REG_PAR2: lo=heapRegionShiftBy, hi=logOfHRGrainBytes
-            offsetof(struct HWGCParameter, stepperOffset),                   // REG_PAR3
-            offsetof(struct HWGCParameter, youngWordsBase),                  // REG_PAR4
-            offsetof(struct HWGCParameter, regionAttrBase),                  // REG_PAR5
-            offsetof(struct HWGCParameter, plabAllocatorPtr),                // REG_PAR6
-            offsetof(struct HWGCParameter, regionAttrBiasedBase),            // REG_PAR7
-            offsetof(struct HWGCParameter, heapRegionBiasedBase),            // REG_PAR8
-            offsetof(struct HWGCParameter, parScanThreadStatePtr),           // REG_PAR9
-            offsetof(struct HWGCParameter, taskQueueBottomAddr),             // REG_PAR10
-            offsetof(struct HWGCParameter, taskQueueAgeTopAddr),             // REG_PAR11
-            offsetof(struct HWGCParameter, taskQueueElemsBase),              // REG_PAR12
-            offsetof(struct HWGCParameter, humogousReclaimCandidateBoolBase) // REG_PAR13
+            offsetof(struct HWGCParameter, chunkSize),                        // REG_PAR0: lo=chunkSize, hi=ageThreshold
+            offsetof(struct HWGCParameter, heapRegionBias),                   // REG_PAR1: lo=heapRegionBias, hi=regionAttrShiftBy
+            offsetof(struct HWGCParameter, heapRegionShiftBy),                // REG_PAR2: lo=heapRegionShiftBy, hi=logOfHRGrainBytes
+            offsetof(struct HWGCParameter, stepperOffset),                    // REG_PAR3
+            offsetof(struct HWGCParameter, youngWordsBase),                   // REG_PAR4
+            offsetof(struct HWGCParameter, regionAttrBase),                   // REG_PAR5
+            offsetof(struct HWGCParameter, plabAllocatorPtr),                 // REG_PAR6
+            offsetof(struct HWGCParameter, regionAttrBiasedBase),             // REG_PAR7
+            offsetof(struct HWGCParameter, heapRegionBiasedBase),             // REG_PAR8
+            offsetof(struct HWGCParameter, parScanThreadStatePtr),            // REG_PAR9
+            offsetof(struct HWGCParameter, taskQueueBottomAddr),              // REG_PAR10
+            offsetof(struct HWGCParameter, taskQueueAgeTopAddr),              // REG_PAR11
+            offsetof(struct HWGCParameter, taskQueueElemsBase),               // REG_PAR12
+            offsetof(struct HWGCParameter, humogousReclaimCandidateBoolBase), // REG_PAR13
+            offsetof(struct HWGCParameter, cardTablePtr)                      // REG_PAR14
         };
-        int idx = addr - REG_PAR0;
+        int idx = (addr - REG_PAR0) / 8;
         uint8_t *base = (uint8_t *)&hwgc->pars;
         if (idx <= 2)
         {
@@ -194,7 +228,6 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
 
     qemu_mutex_unlock(&hwgc->thr_mutex);
 }
-
 static const MemoryRegionOps hwgc_mmio_ops = {
     .read = hwgc_mmio_read,
     .write = hwgc_mmio_write,
@@ -209,19 +242,523 @@ static const MemoryRegionOps hwgc_mmio_ops = {
     },
 };
 
-static void do_hwgc_work(void *opaque, struct HWGCParameter)
+static void pushTask(void *opaque, uintptr_t pushData)
 {
-    static uint64_t task;
+    HWGCState *hwgc = opaque;
+
+    uint localBot;
+    readHWAddr(hwgc->pars.taskQueueBottomAddr, &localBot, 4);
+    writeHWAddr(hwgc->pars.taskQueueElemsBase + localBot * 8, &pushData, 8);
+    localBot = (localBot + 1) & ((1 << 17) - 1);
+    writeHWAddr(hwgc->pars.taskQueueBottomAddr, &localBot, 4);
+}
+
+static void do_hwgc_work(void *opaque)
+{
 
     HWGCState *hwgc = opaque;
 
+    uintptr_t task = 0;
     if (hwgc->current == STEP_FETCH)
     {
-        uint64_t localBot, ageTop;
-        accessHWAddr(hwgc->pars.taskQueueBottomAddr, &localBot, 4);
-        accessHWAddr(hwgc->pars.taskQueueAgeTopAddr, &ageTop, 4);
-        printf("localBot %lx AgeTop %lx\n", localBot, ageTop);
-        hwgc->current = STEP_DONE;
+        uint localBot, ageTop;
+        readHWAddr(hwgc->pars.taskQueueBottomAddr, &localBot, 4);
+        readHWAddr(hwgc->pars.taskQueueAgeTopAddr, &ageTop, 4);
+        uint64_t dirty_n_elems = (localBot - ageTop) & ((1 << 17) - 1);
+        if (dirty_n_elems == 0)
+        {
+            hwgc->current = STEP_DONE;
+            printf("The jvm taskqueue has handled over, and not enter the state %x\n", STEP_DONE);
+        }
+        else
+        {
+            localBot = (localBot - 1) & ((1 << 17) - 1);
+            writeHWAddr(hwgc->pars.taskQueueBottomAddr, &localBot, 4);
+            readHWAddr(hwgc->pars.taskQueueElemsBase + localBot * 8, &task, 8);
+            printf("The task is %lx, and now enter the state %x\n", task, STEP_DISPATCH);
+            hwgc->current = STEP_DISPATCH;
+        }
+    }
+
+    if (hwgc->current == STEP_DISPATCH)
+    {
+        if ((task & 0x3) == 0x0)
+        {
+            hwgc->current = STEP_COMMON_OOP;
+            printf("The task is common oop ptr, now enter the state %x\n", STEP_COMMON_OOP);
+        }
+        else
+        {
+            hwgc->current = STEP_PARTIAL_ARRAY;
+            printf("The task is partial array oop, now enter the state %x\n", STEP_PARTIAL_ARRAY);
+        }
+    }
+
+    uintptr_t p = 0, q = 0;
+    uintptr_t from_obj = 0, to_obj = 0;
+    bool scanning_in_young = false;
+    if (hwgc->current == STEP_PARTIAL_ARRAY)
+    {
+        from_obj = task - 0x2;
+        uintptr_t m_value;
+        readHWAddr(from_obj, &m_value, 8);
+        to_obj = m_value & ~0x3;
+
+        int array_length, start;
+        readHWAddr(from_obj + 16, &array_length, 4);
+        readHWAddr(to_obj + 16, &start, 4);
+        int to_obj_length = start + hwgc->pars.chunkSize;
+        writeHWAddr(to_obj + 16, &to_obj_length, 4);
+
+        uint32_t task_num = start / hwgc->pars.chunkSize;
+        uint32_t remaining_tasks = (array_length - start) / hwgc->pars.chunkSize;
+        uint32_t _task_limit = (uint32_t)hwgc->pars.stepperOffset;
+        uint32_t _task_fanout = (uint32_t)(hwgc->pars.stepperOffset >> 32);
+        uint32_t max_pending = (_task_fanout - 1) * task_num + 1;
+        uint32_t pending = MIN(MIN(max_pending, remaining_tasks), _task_limit);
+        uint32_t ncreate = MIN(_task_fanout, MIN(remaining_tasks, _task_limit + 1) - pending);
+
+        for (uint32_t i = 0; i < ncreate; ++i)
+            pushTask(hwgc, from_obj + 0x2);
+
+        uintptr_t heap_region_ptr = hwgc->pars.heapRegionBiasedBase + (to_obj >> hwgc->pars.heapRegionShiftBy) * 8;
+        uintptr_t heap_region;
+        readHWAddr(heap_region_ptr, &heap_region, 8);
+        int heap_region_type;
+        readHWAddr(heap_region + 0xbc, &heap_region_type, 4);
+        scanning_in_young = heap_region_type != 0;
+
+        uintptr_t low = to_obj + 24 + (uint)start * 8;
+        uintptr_t high = to_obj + 24 + to_obj_length * 8;
+        p = to_obj + 24;
+        q = p + to_obj_length * 8;
+        if (p < low)
+            p = low;
+        if (q > high)
+            q = high;
+        hwgc->current = STEP_TRACE_PLUS;
+        hwgc->done_to = STEP_FETCH;
+        printf("p is %lx, q is %lx, now enter the state %x\n", p, q, STEP_TRACE_PLUS);
+    }
+
+    uintptr_t src = 0;
+    uintptr_t dest = 0;
+    if (hwgc->current == STEP_TRACE_PLUS)
+    {
+        if (p < q)
+        {
+            src = p - to_obj + from_obj;
+            dest = p;
+            p += 8;
+            hwgc->current = STEP_DO_OOP_WORK;
+            hwgc->previous = STEP_TRACE_PLUS;
+            printf("p is %lx, q is %lx, now enter the state %x\n", p, q, STEP_DO_OOP_WORK);
+        }
+        else
+        {
+            hwgc->current = hwgc->done_to;
+            printf("p >= q, now enter the state %x\n", hwgc->done_to);
+        }
+    }
+
+    uint16_t region_attr = 0;
+    uintptr_t region_attr_ptr = 0;
+    if (hwgc->current == STEP_DO_OOP_WORK)
+    {
+        uintptr_t heap_oop;
+        readHWAddr(src, &heap_oop, 8);
+        if (heap_oop == 0)
+            hwgc->current = hwgc->previous;
+
+        region_attr_ptr = hwgc->pars.regionAttrBiasedBase + (heap_oop >> hwgc->pars.regionAttrShiftBy) * 2;
+        readHWAddr(region_attr_ptr, &region_attr, 2);
+        if ((int8_t)(region_attr >> 8) >= 0)
+        {
+            pushTask(hwgc, dest);
+            hwgc->current = hwgc->previous;
+        }
+        else if (((dest ^ heap_oop) >> hwgc->pars.logOfHRGrainBytes) != 0)
+        {
+            if ((int8_t)(region_attr >> 8) == -2)
+            {
+                size_t pointer_delta = heap_oop - ((uintptr_t)hwgc->pars.heapRegionBias << hwgc->pars.heapRegionShiftBy);
+                uint32_t region = pointer_delta >> hwgc->pars.logOfHRGrainBytes;
+                int8_t value;
+                readHWAddr(hwgc->pars.humogousReclaimCandidateBoolBase + region, &value, 1);
+                if (value)
+                {
+                    value = 0;
+                    writeHWAddr(hwgc->pars.humogousReclaimCandidateBoolBase + region, &value, 1);
+                    uintptr_t region_base_ptr = hwgc->pars.regionAttrBase + region * 2;
+                    value = -1;
+                    writeHWAddr(region_base_ptr + 1, &value, 1);
+                }
+            }
+            if (scanning_in_young == 1)
+                hwgc->current = hwgc->previous;
+            else
+                hwgc->current = STEP_AOP;
+        }
+    }
+
+    size_t card_index = 0;
+    if (hwgc->current == STEP_AOP)
+    {
+        if ((region_attr & 0xff) == 0)
+            hwgc->current = hwgc->previous;
+        else
+        {
+            uintptr_t byte_map, byte_map_base;
+            readHWAddr(hwgc->pars.cardTablePtr + 0x38, &byte_map, 8);
+            readHWAddr(hwgc->pars.cardTablePtr + 0x40, &byte_map_base, 8);
+            uintptr_t res = byte_map_base + (dest >> 9);
+            card_index = res - byte_map;
+            size_t ref_card_index;
+            readHWAddr(hwgc->pars.parScanThreadStatePtr + 0x1b0, &ref_card_index, 8);
+            if (ref_card_index != card_index)
+            {
+                uintptr_t rdc_local_qset_ptr = hwgc->pars.parScanThreadStatePtr + 0x18;
+                uintptr_t queue_ptr = rdc_local_qset_ptr + 0x30;
+                size_t index;
+                readHWAddr(queue_ptr, &index, 8);
+                index = index / 8;
+                if (index == 0)
+                {
+                    hwgc->softPars.par0 = res;
+                    hwgc->current = STEP_ENQUEUED_INT;
+                    if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                    {
+                        bql_lock();
+                        hwgc_raise_irq(hwgc, ENQUEUE_FAILED_IRQ);
+                        bql_unlock();
+                    }
+                }
+                else
+                {
+                    uintptr_t buffer;
+                    readHWAddr(queue_ptr + 0x10, &buffer, 8);
+                    --index;
+                    writeHWAddr(buffer + index * 8, &res, 8);
+                    index = index * 8;
+                    writeHWAddr(queue_ptr, &index, 8);
+                    hwgc->current = STEP_UPDATE_CARD;
+                }
+            }
+            else
+                hwgc->current = hwgc->previous;
+        }
+    }
+
+    if (hwgc->current == STEP_UPDATE_CARD)
+    {
+        writeHWAddr(hwgc->pars.parScanThreadStatePtr + 0x1b0, &card_index, 8);
+        hwgc->current = hwgc->previous;
+    }
+
+    uintptr_t obj = 0;
+    uint64_t m_value = 0;
+    if (hwgc->current == STEP_COMMON_OOP)
+    {
+        readHWAddr(task, &obj, 8);
+        region_attr_ptr = hwgc->pars.regionAttrBiasedBase + (obj >> hwgc->pars.regionAttrShiftBy) * 2;
+        readHWAddr(region_attr_ptr, &region_attr, 2);
+        if ((int8_t)(region_attr >> 8) < 0)
+            hwgc->current = STEP_FETCH;
+
+        readHWAddr(obj, &m_value, 8);
+        if ((m_value & 0x3) == 0x3)
+        {
+            obj = m_value & ~0x3;
+            hwgc->current = STEP_UPDATE_REF;
+        }
+        else
+            hwgc->current = STEP_Copy2Survivor;
+    }
+
+    if (hwgc->current == STEP_UPDATE_REF)
+    {
+        writeHWAddr(task, &obj, 8);
+        if (((task ^ obj) >> hwgc->pars.logOfHRGrainBytes) == 0)
+            hwgc->current = STEP_FETCH;
+        else
+        {
+            uintptr_t heap_region_ptr = hwgc->pars.heapRegionBiasedBase + (task >> hwgc->pars.heapRegionShiftBy) * 8;
+            uintptr_t heap_region;
+            readHWAddr(heap_region_ptr, &heap_region, 8);
+            uint heap_region_type;
+            readHWAddr(heap_region + 0xbc, &heap_region_type, 4);
+            bool typeIsYoung = (heap_region_type & 0x2) != 0;
+            if (!typeIsYoung)
+            {
+                region_attr_ptr = hwgc->pars.regionAttrBiasedBase + (obj >> hwgc->pars.regionAttrShiftBy) * 2;
+                readHWAddr(region_attr_ptr, &region_attr, 2);
+                hwgc->current = STEP_AOP;
+                hwgc->previous = STEP_FETCH;
+            }
+            else
+                hwgc->current = STEP_FETCH;
+        }
+    }
+
+    int lh = 0;
+    int kid = 0;
+    size_t size = 0;
+    uint age = 0;
+    uintptr_t obj_ptr = 0;
+    uintptr_t klass_ptr = 0;
+    uintptr_t from_region = 0;
+    int8_t dest_attr_type = 0;
+    if (hwgc->current == STEP_Copy2Survivor)
+    {
+        uint64_t lh_kid;
+        readHWAddr(obj + 0x8, &klass_ptr, 8);
+        readHWAddr(klass_ptr + 0x8, &lh_kid, 8);
+        lh = (int)lh_kid;
+        kid = lh_kid >> 32;
+        if (lh > 0)
+            size = lh >> 3;
+        else
+        {
+            int array_length;
+            readHWAddr(obj + 16, &array_length, 4);
+            size_t size_in_bytes = (array_length << (uint8_t)lh) + (uint8_t)(lh >> 16);
+            size = (size_t)(size_in_bytes & 0x7 ? (size_in_bytes >> 3) + 1 : size_in_bytes >> 3);
+        }
+
+        int8_t region_attr_type = (int8_t)(region_attr >> 8);
+        uintptr_t dest_attr_ptr = hwgc->pars.parScanThreadStatePtr + 0x178 + region_attr_type * 2;
+        if (region_attr_type == 0)
+        {
+            if ((m_value & 0x1) == 0)
+            {
+                bool has_monitor = m_value & 0x2;
+                uint64_t ptr = has_monitor ? m_value ^ 0x2 : m_value;
+                uint64_t mark;
+                readHWAddr(ptr, &mark, 8);
+                age = (mark >> 3) & 0x1111;
+            }
+            else
+                age = (m_value >> 3) & 0x1111;
+            if (age < hwgc->pars.ageThreshold)
+                dest_attr_ptr = region_attr_ptr;
+        }
+
+        uintptr_t from_region_ptr = hwgc->pars.heapRegionBiasedBase + (obj >> hwgc->pars.heapRegionShiftBy) * 8;
+        readHWAddr(from_region_ptr, &from_region, 8);
+        uint node_index = 0;
+
+        uintptr_t alloc_buffers_ptr = hwgc->pars.plabAllocatorPtr + 0x10;
+        uint16_t dest_attr;
+        readHWAddr(dest_attr_ptr, &dest_attr, 2);
+        dest_attr_type = (int8_t)(dest_attr >> 8);
+
+        uintptr_t buffer_ptr;
+        readHWAddr(alloc_buffers_ptr + dest_attr_type * 8, &buffer_ptr, 8);
+        uintptr_t buffer;
+        readHWAddr(buffer_ptr, &buffer, 8);
+
+        uintptr_t region_top, region_end;
+        readHWAddr(buffer + 0x30, &region_top, 8);
+        readHWAddr(buffer + 0x38, &region_end, 8);
+        if ((region_end - region_top) / 8 >= size)
+        {
+            obj_ptr = region_top;
+            uintptr_t write_top_res = region_top + size * 8;
+            writeHWAddr(buffer + 0x30, &write_top_res, 8);
+            hwgc->current = STEP_Copy2SurvivorAop;
+        }
+        else
+        {
+            obj_ptr = 0;
+            hwgc->current = STEP_ALLOC_INT;
+            hwgc->softPars.par0 = dest_attr_ptr;
+            hwgc->softPars.par1 = obj;
+            hwgc->softPars.par2 = size;
+            hwgc->softPars.par3 = (uint64_t)age << 32 | node_index;
+            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            {
+                bql_lock();
+                hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
+                bql_unlock();
+            }
+        }
+    }
+
+    if (hwgc->current == STEP_ALLOC_WAKE)
+    {
+        obj_ptr = hwgc->soft_res;
+        hwgc->current = STEP_Copy2SurvivorAop;
+    }
+
+    uintptr_t start_map = 0, end_map = 0;
+    if (hwgc->current == STEP_Copy2SurvivorAop)
+    {
+        uintptr_t m = (obj_ptr & ~0x3) | 0x3;
+        writeHWAddr(obj, &m, 8);
+
+        uint youngIndex;
+        readHWAddr(from_region + 256, &youngIndex, 4);
+
+        uint64_t orginValue;
+        readHWAddr(hwgc->pars.youngWordsBase + youngIndex * 8, &orginValue, 8);
+        uint64_t writeValue = orginValue + size;
+        writeHWAddr(hwgc->pars.youngWordsBase + youngIndex * 8, &writeValue, 8);
+
+        uint64_t new_mark = m_value;
+        if (dest_attr_type == 0)
+        {
+            if ((m_value & 0x1) == 0x0)
+            {
+                bool has_monitor = m_value & 0x2;
+                uint64_t ptr = has_monitor ? m_value ^ 0x2 : m_value;
+                uint64_t mark;
+                readHWAddr(ptr, &mark, 8);
+                mark = (mark & ~0x3) |
+                       (((age + 1 < 15 ? age + 1 : age) & 15) << 3);
+                writeHWAddr(ptr, &mark, 8);
+            }
+            else
+                new_mark = (m_value & ~0x3) |
+                           (((age + 1 < 15 ? age + 1 : age) & 15) << 3);
+        }
+        writeHWAddr(obj_ptr, &new_mark, 8);
+
+        for (size_t i = 1; i < size; ++i)
+        {
+            uintptr_t res;
+            readHWAddr(obj + i * 8, &res, 8);
+            writeHWAddr(obj_ptr + i * 8, &res, 8);
+        }
+
+        scanning_in_young = dest_attr_type == 0;
+
+        from_obj = obj;
+        to_obj = obj_ptr;
+
+        if (lh < 0)
+        {
+            if (kid == 5)
+            {
+                int array_length;
+                readHWAddr(from_obj + 16, &array_length, 4);
+                uint64_t end = array_length % hwgc->pars.chunkSize;
+                writeHWAddr(to_obj + 16, &end, 4);
+
+                uint step_index = end;
+                uint step_ncreate = array_length > end ? 1u : 0u;
+                for (uint i = 0; i < step_ncreate; ++i)
+                    pushTask(hwgc, from_obj + 0x2);
+
+                uintptr_t low = to_obj + 24;
+                uintptr_t high = low + step_index * 8;
+                p = to_obj + 24;
+                q = p + array_length * 8;
+                if (p < low)
+                    p = low;
+                if (q > high)
+                    q = high;
+                obj = obj_ptr;
+                hwgc->current = STEP_TRACE_PLUS;
+                hwgc->done_to = STEP_UPDATE_REF;
+            }
+            obj = obj_ptr;
+            hwgc->current = STEP_UPDATE_REF;
+        }
+        else
+        {
+            int vtable_len, itable_len, nonStaticOopMapSize;
+            readHWAddr(klass_ptr + 160, &vtable_len, 4);
+            uint64_t temp;
+            readHWAddr(klass_ptr + 296, &temp, 8);
+            itable_len = temp >> 32;
+            nonStaticOopMapSize = (int)temp;
+            start_map = klass_ptr + 464 + (vtable_len + itable_len) * 8;
+            end_map = start_map + nonStaticOopMapSize * 8;
+            hwgc->current = STEP_OOP_TRACE;
+        }
+    }
+
+    int ref_state = 0;
+    if (hwgc->current == STEP_OOP_TRACE)
+    {
+        if (start_map < end_map)
+        {
+            end_map -= 8;
+            uint64_t temp;
+            readHWAddr(end_map, &temp, 8);
+            p = obj_ptr + (int)temp;
+            q = p + (temp >> 32) * 8;
+            hwgc->current = STEP_TRACE_DEC;
+            hwgc->done_to = STEP_OOP_TRACE;
+        }
+        else
+        {
+            ref_state = 0;
+            if (kid == 2)
+                hwgc->current = STEP_MIRROR_TRACE;
+            else if (kid == 1)
+                hwgc->current = STEP_REF_TRACE;
+            else
+            {
+                obj = obj_ptr;
+                hwgc->current = STEP_UPDATE_REF;
+            }
+        }
+    }
+
+    if (hwgc->current == STEP_TRACE_DEC)
+    {
+        if (p < q)
+        {
+            q -= 8;
+            src = q - to_obj + from_obj;
+            dest = q;
+            hwgc->current = STEP_DO_OOP_WORK;
+            hwgc->previous = STEP_TRACE_DEC;
+        }
+        else
+            hwgc->current = hwgc->done_to;
+    }
+
+    if (hwgc->current == STEP_MIRROR_TRACE)
+    {
+        uint staticCount;
+        readHWAddr(from_obj + 40, &staticCount, 4);
+        p = to_obj + 184;
+        q = p + staticCount * 8;
+        obj = obj_ptr;
+        hwgc->current = STEP_TRACE_PLUS;
+        hwgc->done_to = STEP_UPDATE_REF;
+    }
+
+    if (hwgc->current == STEP_REF_TRACE)
+    {
+        if (ref_state == 0)
+        {
+            src = from_obj + 40;
+            dest = to_obj + 40;
+            hwgc->current = STEP_DO_OOP_WORK;
+            hwgc->previous = STEP_REF_TRACE;
+            ref_state = 1;
+        }
+        else if (ref_state == 1)
+        {
+            src = from_obj + 16;
+            dest = to_obj + 16;
+            hwgc->current = STEP_DO_OOP_WORK;
+            hwgc->previous = STEP_REF_TRACE;
+            ref_state = 2;
+        }
+        else if (ref_state == 2)
+        {
+            src = from_obj + 40;
+            dest = to_obj + 40;
+            hwgc->current = STEP_DO_OOP_WORK;
+            hwgc->previous = STEP_UPDATE_REF;
+
+            obj = obj_ptr;
+            ref_state = 0;
+        }
     }
 }
 
@@ -232,7 +769,6 @@ static void *hwgc_work_thread(void *opaque)
     while (1)
     {
         printf("do hwgc work\n");
-        struct HWGCParameter hwgc_par;
         qemu_mutex_lock(&hwgc->thr_mutex);
         while ((qatomic_read(&hwgc->status) & HWGC_STATUS_COMPUTING) == 0 && !hwgc->stop)
             qemu_cond_wait(&hwgc->thr_cond, &hwgc->thr_mutex);
@@ -243,22 +779,42 @@ static void *hwgc_work_thread(void *opaque)
             break;
         }
 
-        hwgc_par = hwgc->pars;
         qemu_mutex_unlock(&hwgc->thr_mutex);
 
         while (1)
         {
-            do_hwgc_work(hwgc, hwgc_par);
+            do_hwgc_work(hwgc);
             if (hwgc->current == STEP_DONE)
                 break;
-            if (hwgc->current == STEP_ALLOCATE_SLOW)
+            if (hwgc->current == STEP_ALLOC_INT)
             {
                 qemu_mutex_lock(&hwgc->thr_mutex);
                 while (!hwgc->cont && !hwgc->stop)
                     qemu_cond_wait(&hwgc->thr_cond, &hwgc->thr_mutex);
-                printf("wait complete\n");
+                if (hwgc->stop)
+                {
+                    qemu_mutex_unlock(&hwgc->thr_mutex);
+                    return NULL;
+                }
+                printf("wait soft alloc finished\n");
                 hwgc->cont = false;
-                hwgc->current = STEP_AOP;
+                hwgc->current = STEP_ALLOC_WAKE;
+                qemu_mutex_unlock(&hwgc->thr_mutex);
+                continue;
+            }
+            if (hwgc->current == STEP_ENQUEUED_INT)
+            {
+                qemu_mutex_lock(&hwgc->thr_mutex);
+                while (!hwgc->cont && !hwgc->stop)
+                    qemu_cond_wait(&hwgc->thr_cond, &hwgc->thr_mutex);
+                if (hwgc->stop)
+                {
+                    qemu_mutex_unlock(&hwgc->thr_mutex);
+                    return NULL;
+                }
+                printf("wait soft enqueued finished\n");
+                hwgc->cont = false;
+                hwgc->current = STEP_UPDATE_CARD;
                 qemu_mutex_unlock(&hwgc->thr_mutex);
                 continue;
             }
