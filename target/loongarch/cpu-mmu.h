@@ -8,7 +8,8 @@
 #ifndef LOONGARCH_CPU_MMU_H
 #define LOONGARCH_CPU_MMU_H
 
-typedef enum TLBRet {
+typedef enum TLBRet
+{
     TLBRET_MATCH,
     TLBRET_BADADDR,
     TLBRET_NOMATCH,
@@ -19,15 +20,16 @@ typedef enum TLBRet {
     TLBRET_PE,
 } TLBRet;
 
-typedef struct MMUContext {
-    vaddr         addr;
-    uint64_t      pte;
-    hwaddr        physical;
-    int           ps;  /* page size shift */
-    int           prot;
-    int           tlb_index;
-    int           mmu_index;
-    uint64_t      pte_buddy[2];
+typedef struct MMUContext
+{
+    vaddr addr;
+    uint64_t pte;
+    hwaddr physical;
+    int ps; /* page size shift */
+    int prot;
+    int tlb_index;
+    int mmu_index;
+    uint64_t pte_buddy[2];
 } MMUContext;
 
 static inline bool cpu_has_ptw(CPULoongArchState *env)
@@ -39,9 +41,12 @@ static inline bool pte_present(CPULoongArchState *env, uint64_t entry)
 {
     uint8_t present;
 
-    if (cpu_has_ptw(env)) {
+    if (cpu_has_ptw(env))
+    {
         present = FIELD_EX64(entry, TLBENTRY, P);
-    } else {
+    }
+    else
+    {
         present = FIELD_EX64(entry, TLBENTRY, V);
     }
 
@@ -52,9 +57,12 @@ static inline bool pte_write(CPULoongArchState *env, uint64_t entry)
 {
     uint8_t writable;
 
-    if (cpu_has_ptw(env)) {
+    if (cpu_has_ptw(env))
+    {
         writable = FIELD_EX64(entry, TLBENTRY, W);
-    } else {
+    }
+    else
+    {
         writable = FIELD_EX64(entry, TLBENTRY, D);
     }
 
@@ -93,10 +101,13 @@ TLBRet loongarch_check_pte(CPULoongArchState *env, MMUContext *context,
 TLBRet get_physical_address(CPULoongArchState *env, MMUContext *context,
                             MMUAccessType access_type, int mmu_idx,
                             int is_debug);
+TLBRet get_physical_address_debug(CPULoongArchState *env, MMUContext *context,
+                                  MMUAccessType access_type, int mmu_idx,
+                                  int is_debug);
 TLBRet loongarch_ptw(CPULoongArchState *env, MMUContext *context,
                      int access_type, int mmu_idx, int debug);
 void get_dir_base_width(CPULoongArchState *env, uint64_t *dir_base,
                         uint64_t *dir_width, unsigned int level);
 hwaddr loongarch_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
 
-#endif  /* LOONGARCH_CPU_MMU_H */
+#endif /* LOONGARCH_CPU_MMU_H */

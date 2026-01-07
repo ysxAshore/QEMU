@@ -12,6 +12,8 @@
 #include "exec/target_page.h"
 #include "system/address-spaces.h"
 
+// #define DEBUG_ENABLE 1
+
 // MMIO REG
 #define REG_DEVICE_ID 0x0
 #define REG_STATUS 0x4
@@ -31,23 +33,24 @@
 #define REG_PAR11 0x68
 #define REG_PAR12 0x70
 #define REG_PAR13 0x78
-#define REG_PAR14 0x80
-#define REG_START_WORK 0x88
-#define REG_CONTINUE_WORK 0x8c
-#define REG_SOFT_RES 0x90
-#define REG_SOFT_PAR0 0x98
-#define REG_SOFT_PAR1 0xa0
-#define REG_SOFT_PAR2 0xa8
-#define REG_SOFT_PAR3 0xb0
+#define REG_START_WORK 0x80
+#define REG_CONTINUE_WORK 0x84
+#define REG_SOFT_RES 0x88
+#define REG_SOFT_PAR0 0x90
+#define REG_SOFT_PAR1 0x98
+#define REG_SOFT_PAR2 0xa0
+#define REG_SOFT_PAR3 0xa8
 
 #define ALLOC_SLOW_IRQ 0x00000001
-#define ENQUEUE_FAILED_IRQ 0x00000100
-#define COMPLETE_IRQ 0x00010000
+#define ENQUEUE_FAILED_IRQ 0x00000010
+#define PAGE_FAULT_IRQ 0x00000100
+#define COMPLETE_IRQ 0x00001000
 
 #define HWGC_DEVICE_ID 0x20020420
 
 #define HWGC_STATUS_COMPUTING 0x01
-#define HWGC_STATUS_IRQ 0x80
+#define HWGC_STATUS_WAKE 0x02
+#define HWGC_STATUS_IRQ 0x04
 
 struct HWGCParameter
 {
@@ -65,18 +68,18 @@ struct HWGCParameter
     uint64_t heapRegionBiasedBase;
     uint64_t parScanThreadStatePtr;
     uint64_t taskQueueBottomAddr;
-    uint64_t taskQueueAgeTopAddr;
     uint64_t taskQueueElemsBase;
     uint64_t humogousReclaimCandidateBoolBase;
     uint64_t cardTablePtr;
 };
 
-struct HWGCSoftCallParameter
+struct HWGCSoftRelated
 {
     uint64_t par0;
     uint64_t par1;
     uint64_t par2;
     uint64_t par3;
+    uint64_t res;
 };
 
 enum HWGC_EXEC_STEP
@@ -84,20 +87,15 @@ enum HWGC_EXEC_STEP
     STEP_FETCH = 0,
     STEP_DISPATCH,
     STEP_PARTIAL_ARRAY,
-    STEP_TRACE_PLUS,
     STEP_COMMON_OOP,
-    STEP_UPDATE_REF,
     STEP_Copy2Survivor,
-    STEP_ALLOC_INT,
-    STEP_ALLOC_WAKE,
-    STEP_Copy2SurvivorAop,
-    STEP_OOP_TRACE,
+    STEP_COPY,
+    STEP_TRACE,
+    STEP_TRACE_PLUS,
     STEP_TRACE_DEC,
-    STEP_MIRROR_TRACE,
-    STEP_REF_TRACE,
     STEP_DO_OOP_WORK,
     STEP_AOP,
-    STEP_ENQUEUED_INT,
-    STEP_UPDATE_CARD,
-    STEP_DONE
+    STEP_DEBUG,
+    STEP_PAGE_FAULT,
+    STEP_DONE,
 };
