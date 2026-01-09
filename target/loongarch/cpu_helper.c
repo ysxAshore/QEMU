@@ -434,6 +434,6 @@ hwaddr loongarch_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     {
         return -1;
     }
-    printf("translate %lx %lx\n", addr, context.physical);
+    // printf("translate %lx %lx\n", addr, context.physical);
     return context.physical;
 }

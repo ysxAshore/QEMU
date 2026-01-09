@@ -71,6 +71,7 @@ struct HWGCParameter
     uint64_t taskQueueElemsBase;
     uint64_t humogousReclaimCandidateBoolBase;
     uint64_t cardTablePtr;
+    uint64_t g1h;
 };
 
 struct HWGCSoftRelated
@@ -89,6 +90,9 @@ enum HWGC_EXEC_STEP
     STEP_PARTIAL_ARRAY,
     STEP_COMMON_OOP,
     STEP_Copy2Survivor,
+    STEP_ALLOC,
+    STEP_ALLOCATE_DIRECT,
+    STEP_PAR_ALOCATE,
     STEP_COPY,
     STEP_TRACE,
     STEP_TRACE_PLUS,
