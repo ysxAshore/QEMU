@@ -33,18 +33,27 @@
 #define REG_PAR11 0x68
 #define REG_PAR12 0x70
 #define REG_PAR13 0x78
-#define REG_START_WORK 0x80
-#define REG_CONTINUE_WORK 0x84
-#define REG_SOFT_RES 0x88
-#define REG_SOFT_PAR0 0x90
-#define REG_SOFT_PAR1 0x98
-#define REG_SOFT_PAR2 0xa0
-#define REG_SOFT_PAR3 0xa8
+#define REG_PAR14 0x80
+#define REG_PAR15 0x88
+#define REG_PAR16 0x90
+#define REG_PAR17 0x98
+#define REG_PAR18 0xa0
+#define REG_PAR19 0xa8
+#define REG_PAR20 0xb0
+#define REG_PAR21 0xb8
+#define REG_START_WORK 0xc0
+#define REG_CONTINUE_WORK 0xc4
+#define REG_SOFT_RES 0xc8
+#define REG_SOFT_PAR0 0xd0
+#define REG_SOFT_PAR1 0xd8
+#define REG_SOFT_PAR2 0xe0
+#define REG_SOFT_PAR3 0xe8
 
 #define ALLOC_SLOW_IRQ 0x00000001
 #define ENQUEUE_FAILED_IRQ 0x00000010
 #define PAGE_FAULT_IRQ 0x00000100
 #define COMPLETE_IRQ 0x00001000
+#define DEBUG_IRQ 0x00010000
 
 #define HWGC_DEVICE_ID 0x20020420
 
@@ -72,6 +81,12 @@ struct HWGCParameter
     uint64_t humogousReclaimCandidateBoolBase;
     uint64_t cardTablePtr;
     uint64_t g1h;
+    uint64_t intArrayKlassObj;
+    uint64_t objectKlass;
+    uint64_t lockPtr;
+    uint64_t thread;
+    uint64_t dummyRegion;
+    uint64_t numaPtr;
 };
 
 struct HWGCSoftRelated
@@ -86,20 +101,34 @@ struct HWGCSoftRelated
 enum HWGC_EXEC_STEP
 {
     STEP_FETCH = 0,
+
     STEP_DISPATCH,
+
     STEP_PARTIAL_ARRAY,
+
     STEP_COMMON_OOP,
     STEP_Copy2Survivor,
+
     STEP_ALLOC,
     STEP_ALLOCATE_DIRECT,
-    STEP_PAR_ALOCATE,
+    STEP_ALLOCATE_DURING_GC,
+    STEP_ATTEMPT_ALLOC,
+    STEP_NEW_GC_ALLOC,
+    STEP_ALLOC_FREE_REGION,
+    STEP_PAR_ALLOCATE_IML,
+    STEP_PAR_ALLOCATE,
+
     STEP_COPY,
+
     STEP_TRACE,
     STEP_TRACE_PLUS,
     STEP_TRACE_DEC,
+
     STEP_DO_OOP_WORK,
     STEP_AOP,
+
     STEP_DEBUG,
     STEP_PAGE_FAULT,
+
     STEP_DONE,
 };

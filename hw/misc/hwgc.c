@@ -200,7 +200,7 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
     }
 
     qemu_mutex_lock(&hwgc->thr_mutex);
-    if (addr >= REG_PAR0 && addr <= REG_PAR13)
+    if (addr >= REG_PAR0 && addr <= REG_PAR21)
     {
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_COMPUTING || size != 8)
             return;
@@ -218,7 +218,15 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
             offsetof(struct HWGCParameter, taskQueueBottomAddr),              // REG_PAR10
             offsetof(struct HWGCParameter, taskQueueElemsBase),               // REG_PAR11
             offsetof(struct HWGCParameter, humogousReclaimCandidateBoolBase), // REG_PAR12
-            offsetof(struct HWGCParameter, cardTablePtr)                      // REG_PAR13
+            offsetof(struct HWGCParameter, cardTablePtr),                     // REG_PAR13
+            offsetof(struct HWGCParameter, g1h),                              // REG_PAR14
+            offsetof(struct HWGCParameter, intArrayKlassObj),                 // REG_PAR15
+            offsetof(struct HWGCParameter, objectKlass),                      // REG_PAR16
+            offsetof(struct HWGCParameter, lockPtr),                          // REG_PAR17
+            offsetof(struct HWGCParameter, thread),                           // REG_PAR18
+            offsetof(struct HWGCParameter, dummyRegion),                      // REG_PAR19
+            offsetof(struct HWGCParameter, numaPtr),                          // REG_PAR20
+
         };
         int idx = (addr - REG_PAR0) / 8;
         uint8_t *base = (uint8_t *)&hwgc->pars;
@@ -250,6 +258,9 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
         qatomic_or(&hwgc->status, HWGC_STATUS_WAKE);
         qemu_cond_signal(&hwgc->thr_cond);
     }
+
+    if (addr == REG_SOFT_PAR3)
+        hwgc->softPars.par3 = val;
 
     if (addr == REG_SOFT_RES)
     {
@@ -287,7 +298,7 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
 
 #ifdef DEBUG_ENABLE
         if (write)
-            printf("%s va %lx data(size=%d): 0x%lx --- ", debug_info, addr, size, value);
+            printf("%s va %lx data(size=%d): 0x%lx ---", debug_info, addr, size, value);
         else
             printf("%s va %lx data (size=%d): --- ", debug_info, addr, size);
 #endif
@@ -742,28 +753,15 @@ static void do_hwgc_work(void *opaque)
             else
             {
                 to_obj = 0;
-                hwgc->state = STEP_DEBUG;
-                hwgc->softPars.par0 = dest_attr_ptr;
-                hwgc->softPars.par1 = from_obj;
-                hwgc->softPars.par2 = size;
-                hwgc->softPars.par3 = age;
                 hwgc->sub_state = 0;
-                hwgc->wake_state = STEP_Copy2Survivor;
-                hwgc->wake_sub_state = 12;
-                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
-                {
-                    bql_lock();
-                    hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
-                    bql_unlock();
-                }
-                return;
+                hwgc->state = STEP_ALLOC;
             }
         }
 
         if (hwgc->sub_state == 12)
         {
-            if (to_obj == 0)
-                to_obj = hwgc->softPars.res;
+            // if (to_obj == 0)
+            //     to_obj = hwgc->softPars.res;
             writeSrcMW = (to_obj & ~0x3) | 0x3;
             tag = safeAccessHWAddr(hwgc, from_obj, &writeSrcMW, 8, "write src oop markword", true, STEP_Copy2Survivor, 13);
             if (tag)
@@ -844,6 +842,803 @@ static void do_hwgc_work(void *opaque)
                 hwgc->state = STEP_TRACE;
                 hwgc->sub_state = 0;
             }
+        }
+    }
+
+    static int8_t dest_attr_type;
+    if (hwgc->state == STEP_ALLOC)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            dest_attr_type = (int8_t)(dest_attr >> 8);
+            hwgc->state = STEP_ALLOCATE_DIRECT;
+            hwgc->sub_state = 0;
+            hwgc->previous = STEP_ALLOC;
+            hwgc->previous_sub_state = 1;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+#ifdef DEBUG_ENABLE
+            printf("new obj is %lx\n", to_obj);
+#endif
+            if (to_obj == 0)
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.plabAllocatorPtr + 0x18, &buffer_temp, 8, "read old buffer temp ptr", false, STEP_ALLOC, 2);
+                if (tag)
+                    hwgc->sub_state = 2;
+            }
+            else
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer_temp, &buffer, 8, "read old buffer", false, STEP_ALLOC, 3);
+            if (tag)
+                hwgc->sub_state = 3;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x30, &region_top, 8, "read old region top", false, STEP_ALLOC, 4);
+            if (tag)
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x38, &region_end, 8, "read old region bottom", false, STEP_ALLOC, 5);
+            if (tag)
+                hwgc->sub_state = 5;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            dest_attr_type = 1;
+            dest_attr = (dest_attr & 0xff) | ((int16_t)dest_attr_type << 8);
+            if ((region_end - region_top) / 8 >= size)
+            {
+                to_obj = region_top;
+                region_top = region_top + size * 8;
+                tag = safeAccessHWAddr(hwgc, buffer + 0x30, &region_top, 8, "write old region top", true, STEP_ALLOC, 6);
+                if (tag)
+                    hwgc->sub_state = 6;
+            }
+            else
+            {
+                hwgc->state = STEP_ALLOCATE_DIRECT;
+                hwgc->sub_state = 0;
+                hwgc->previous = STEP_ALLOC;
+                hwgc->previous_sub_state = 6;
+            }
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            tag = safeAccessHWAddr(hwgc, dest_attr_ptr + 1, &dest_attr_type, 1, "write dest attr ptr", true, STEP_ALLOC, 7);
+            if (tag)
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            hwgc->state = STEP_Copy2Survivor;
+            hwgc->sub_state = 12;
+        }
+    }
+
+    static uintptr_t plab_stats_ptr, allocator_ptr, alloc_klass_ptr;
+    static size_t plab_word_size, required_in_plab, actual_plab_size;
+    static size_t min_word_size, desired_word_size;
+    static int during_gc_select;
+    if (hwgc->state == STEP_ALLOCATE_DIRECT)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            if (dest_attr_type == 0)
+                plab_stats_ptr = hwgc->pars.g1h + 0x250;
+            else if (dest_attr_type == 1)
+                plab_stats_ptr = hwgc->pars.g1h + 0x2d0;
+
+            tag = safeAccessHWAddr(hwgc, plab_stats_ptr + 0x30, &originValue, 8, "read plab stats ptr + 0x30", false, STEP_ALLOCATE_DIRECT, 1);
+            if (tag)
+                hwgc->sub_state = 1;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            plab_word_size = MIN(MAX(originValue, 0x102), 0x40000);
+            required_in_plab = size + 0x2;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.plabAllocatorPtr + 0x8, &allocator_ptr, 8, "read allocator ptr", false, STEP_ALLOCATE_DIRECT, 2);
+            if (tag)
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            bool may_throw_away_buffer = required_in_plab * 100 < plab_word_size * 0xa;
+            if ((required_in_plab <= plab_word_size) && may_throw_away_buffer)
+            {
+                // hwgc->sub_state = 0;
+                // hwgc->state = STEP_DEBUG;
+                // hwgc->softPars.par0 = dest_attr_type;
+                // hwgc->softPars.par1 = size;
+                // hwgc->softPars.par2 = hwgc->pars.plabAllocatorPtr;
+                // hwgc->softPars.par3 = 0;
+
+                // hwgc->wake_state = STEP_ALLOCATE_DIRECT;
+                // hwgc->wake_sub_state = 3;
+                // if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                //{
+                //     bql_lock();
+                //     hwgc_raise_irq(hwgc, DEBUG_IRQ);
+                //     bql_unlock();
+                // }
+                // return;
+
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.plabAllocatorPtr + 0x10 + dest_attr_type * 8, &buffer_temp, 8, "read buffer temp", false, STEP_ALLOCATE_DIRECT, 3);
+                if (tag)
+                    hwgc->sub_state = 3;
+            }
+            else
+                hwgc->sub_state = 25;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            // to_obj = hwgc->softPars.res;
+            // hwgc->sub_state = hwgc->previous_sub_state;
+            // hwgc->state = hwgc->previous;
+            // return;
+            tag = safeAccessHWAddr(hwgc, buffer_temp, &buffer, 8, "read buffer", false, STEP_ALLOCATE_DIRECT, 4);
+            if (tag)
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x30, &region_top, 8, "read region top", false, STEP_ALLOCATE_DIRECT, 5);
+            if (tag)
+                hwgc->sub_state = 5;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x40, &region_end, 8, "read region end", false, STEP_ALLOCATE_DIRECT, 6);
+            if (tag)
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            if (region_top < region_end)
+            {
+                size_t words = (region_end - region_top) / 8;
+                if (words >= 3)
+                {
+                    size_t payload_size = words - 3;
+                    size_t len = payload_size * 8 / 4;
+                    alloc_klass_ptr = hwgc->pars.intArrayKlassObj;
+                    tag = safeAccessHWAddr(hwgc, region_top + 16, &len, 4, "write arraylen", true, STEP_ALLOCATE_DIRECT, 7);
+                    if (tag)
+                        hwgc->sub_state = 7;
+                }
+                else if (words > 0)
+                {
+                    alloc_klass_ptr = hwgc->pars.objectKlass;
+                    hwgc->sub_state = 7;
+                }
+            }
+            else
+                hwgc->sub_state = 14;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            originValue = 1;
+            tag = safeAccessHWAddr(hwgc, region_top, &originValue, 8, "write region top", true, STEP_ALLOCATE_DIRECT, 8);
+            if (tag)
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            tag = safeAccessHWAddr(hwgc, region_top + 0x8, &alloc_klass_ptr, 8, "write region top + 0x8", true, STEP_ALLOCATE_DIRECT, 9);
+            if (tag)
+                hwgc->sub_state = 9;
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x38, &region_end, 8, "write buffer + 0x38", true, STEP_ALLOCATE_DIRECT, 10);
+            if (tag)
+                hwgc->sub_state = 10;
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x30, &region_end, 8, "write buffer + 0x30", true, STEP_ALLOCATE_DIRECT, 11);
+            if (tag)
+                hwgc->sub_state = 11;
+        }
+
+        if (hwgc->sub_state == 11)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x28, &region_end, 8, "write buffer + 0x28", true, STEP_ALLOCATE_DIRECT, 12);
+            if (tag)
+                hwgc->sub_state = 12;
+        }
+
+        if (hwgc->sub_state == 12)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x50, &originValue, 8, "read buffer 0x50", false, STEP_ALLOCATE_DIRECT, 13);
+            if (tag)
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 13)
+        {
+            originValue = originValue + (region_end - region_top) / 8;
+            tag = safeAccessHWAddr(hwgc, buffer + 0x50, &originValue, 8, "write buffer + 0x50", true, STEP_ALLOCATE_DIRECT, 14);
+            if (tag)
+                hwgc->sub_state = 14;
+        }
+
+        if (hwgc->sub_state == 14)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.plabAllocatorPtr + 0x30 + dest_attr_type * 8, &originValue, 8, "read num plab fills", false, STEP_ALLOCATE_DIRECT, 15);
+            if (tag)
+                hwgc->sub_state = 15;
+        }
+
+        if (hwgc->sub_state == 15)
+        {
+            originValue = originValue + 1;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.plabAllocatorPtr + 0x30 + dest_attr_type * 8, &originValue, 8, "write num plab fills", true, STEP_ALLOCATE_DIRECT, 16);
+            if (tag)
+                hwgc->sub_state = 16;
+        }
+
+        if (hwgc->sub_state == 16)
+        {
+            // hwgc->state = STEP_DEBUG;
+            // hwgc->sub_state = 0;
+
+            // hwgc->softPars.par0 = dest_attr_type;
+            // hwgc->softPars.par1 = required_in_plab;
+            // hwgc->softPars.par2 = plab_word_size;
+            // hwgc->softPars.par3 = allocator_ptr;
+
+            // hwgc->wake_state = STEP_ALLOCATE_DIRECT;
+            // hwgc->wake_sub_state = 17;
+            // if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            //{
+            //     bql_lock();
+            //     hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
+            //     bql_unlock();
+            // }
+            // return;
+            hwgc->state = STEP_ALLOCATE_DURING_GC;
+            hwgc->sub_state = 0;
+            min_word_size = required_in_plab;
+            desired_word_size = plab_word_size;
+
+            during_gc_select = 0;
+        }
+
+        if (hwgc->sub_state == 17)
+        {
+            // actual_plab_size = hwgc->softPars.par3;
+            // to_obj = hwgc->softPars.res;
+            if (to_obj != 0)
+            {
+                tag = safeAccessHWAddr(hwgc, buffer + 0x20, &actual_plab_size, 8, "write buffer + 0x20", true, STEP_ALLOCATE_DIRECT, 18);
+                if (tag)
+                    hwgc->sub_state = 18;
+            }
+            else
+                hwgc->sub_state = 25;
+        }
+
+        if (hwgc->sub_state == 18)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x28, &to_obj, 8, "write buffer + 0x28", true, STEP_ALLOCATE_DIRECT, 19);
+            if (tag)
+                hwgc->sub_state = 19;
+        }
+
+        if (hwgc->sub_state == 19)
+        {
+            originValue = to_obj + actual_plab_size * 8;
+            tag = safeAccessHWAddr(hwgc, buffer + 0x40, &originValue, 8, "write buffer + 0x40", true, STEP_ALLOCATE_DIRECT, 20);
+            if (tag)
+                hwgc->sub_state = 20;
+        }
+
+        if (hwgc->sub_state == 20)
+        {
+            originValue = to_obj + (actual_plab_size - 2) * 8;
+            tag = safeAccessHWAddr(hwgc, buffer + 0x38, &originValue, 8, "write buffer + 0x38", true, STEP_ALLOCATE_DIRECT, 21);
+            if (tag)
+                hwgc->sub_state = 21;
+        }
+
+        if (hwgc->sub_state == 21)
+        {
+            tag = safeAccessHWAddr(hwgc, buffer + 0x48, &originValue, 8, "read buffer + 0x48", false, STEP_ALLOCATE_DIRECT, 22);
+            if (tag)
+                hwgc->sub_state = 22;
+        }
+
+        if (hwgc->sub_state == 22)
+        {
+            originValue = originValue + actual_plab_size;
+            tag = safeAccessHWAddr(hwgc, buffer + 0x48, &originValue, 8, "write buffer + 0x48", true, STEP_ALLOCATE_DIRECT, 23);
+            if (tag)
+                hwgc->sub_state = 23;
+        }
+
+        if (hwgc->sub_state == 23)
+        {
+            size_t delta = actual_plab_size - 0x2;
+            if (delta >= size)
+                originValue = to_obj + size * 8;
+            else
+            {
+                originValue = to_obj;
+                to_obj = 0;
+            }
+            tag = safeAccessHWAddr(hwgc, buffer + 0x30, &originValue, 8, "write buffer + 0x30", true, STEP_ALLOCATE_DIRECT, 24);
+            if (tag)
+                hwgc->sub_state = 24;
+        }
+
+        if (hwgc->sub_state == 24)
+        {
+            hwgc->state = hwgc->previous;
+            hwgc->sub_state = hwgc->previous_sub_state;
+            return;
+        }
+
+        if (hwgc->sub_state == 25)
+        {
+            // hwgc->state = STEP_DEBUG;
+            // hwgc->sub_state = 0;
+
+            // hwgc->softPars.par0 = dest_attr_type;
+            // hwgc->softPars.par1 = size;
+            // hwgc->softPars.par2 = size;
+            // hwgc->softPars.par3 = allocator_ptr;
+
+            // hwgc->wake_state = STEP_ALLOCATE_DIRECT;
+            // hwgc->wake_sub_state = 26;
+            // if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            //{
+            //     bql_lock();
+            //     hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
+            //     bql_unlock();
+            // }
+            // return;
+            hwgc->state = STEP_ALLOCATE_DURING_GC;
+            hwgc->sub_state = 0;
+            min_word_size = size;
+            desired_word_size = size;
+
+            during_gc_select = 1;
+        }
+
+        if (hwgc->sub_state == 26)
+        {
+            // to_obj = hwgc->softPars.res;
+            hwgc->sub_state = 24;
+        }
+    }
+
+    static uintptr_t region_ptr;
+    static uintptr_t alloc_region;
+    static uintptr_t card_table_ptr, byte_map_base, first, last;
+    static int par_alloc_iml_sel;
+    static int par_alloc_sel;
+    if (hwgc->state == STEP_ALLOCATE_DURING_GC)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            if (dest_attr_type == 0)
+            {
+                tag = safeAccessHWAddr(hwgc, allocator_ptr + 0x28, &region_ptr, 8, "read survivor gc alloc ptr", false, STEP_ALLOCATE_DURING_GC, 1);
+                if (tag)
+                    hwgc->sub_state = 1;
+            }
+            else
+            {
+                region_ptr = allocator_ptr + 0x30;
+                hwgc->sub_state = 1;
+            }
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            tag = safeAccessHWAddr(hwgc, region_ptr + 0x8, &alloc_region, 8, "read alloc region", false, STEP_ALLOCATE_DURING_GC, 2);
+            if (tag)
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            if (dest_attr_type == 0)
+            {
+                par_alloc_iml_sel = 0;
+                hwgc->state = STEP_PAR_ALLOCATE_IML;
+                hwgc->sub_state = 0;
+            }
+            else
+            {
+                par_alloc_sel = 0;
+                hwgc->state = STEP_PAR_ALLOCATE;
+                hwgc->sub_state = 0;
+            }
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            if (to_obj == 0)
+            {
+                tag = safeAccessHWAddr(hwgc, allocator_ptr, &originValue, 1, "read is full value", false, STEP_ALLOCATE_DURING_GC, 9);
+                if (tag)
+                    hwgc->sub_state = 9;
+            }
+            else
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (to_obj != 0 && dest_attr_type == 0)
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.g1h + 0x78, &card_table_ptr, 8, "read card table ptr", false, STEP_ALLOCATE_DURING_GC, 5);
+                if (tag)
+                    hwgc->sub_state = 5;
+            }
+            else
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            tag = safeAccessHWAddr(hwgc, card_table_ptr + 0x40, &byte_map_base, 8, "read byte map base", false, STEP_ALLOCATE_DURING_GC, 6);
+            if (tag)
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            first = byte_map_base + (to_obj >> 9);
+            last = byte_map_base + ((to_obj + actual_plab_size * 8 - 8) >> 9);
+            hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            if (first < last)
+            {
+                uintptr_t temp = first;
+                originValue = 4;
+                ++first;
+                tag = safeAccessHWAddr(hwgc, temp, &originValue, 1, "write first", false, STEP_ALLOCATE_DURING_GC, 7);
+                if (tag)
+                    hwgc->sub_state = 7;
+            }
+            else
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            hwgc->sub_state = during_gc_select ? 24 : 17;
+            hwgc->state = STEP_ALLOCATE_DIRECT;
+            return;
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            bool is_full = dest_attr_type == 0 ? originValue & 0x1 : originValue & 0x2;
+            if (!is_full)
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.lockPtr, &hwgc->pars.thread, 8, "write lock ptr", true, STEP_ALLOCATE_DURING_GC, 10);
+                if (tag)
+                    hwgc->sub_state = 10;
+            }
+            else
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            if (dest_attr_type == 0)
+            {
+                par_alloc_iml_sel = 1;
+                hwgc->state = STEP_PAR_ALLOCATE_IML;
+                hwgc->sub_state = 0;
+            }
+            else
+            {
+                par_alloc_sel = 1;
+                hwgc->state = STEP_PAR_ALLOCATE;
+                hwgc->sub_state = 0;
+            }
+        }
+
+        if (hwgc->sub_state == 11)
+        {
+            if (to_obj == 0)
+            {
+                printf("needs allocate\n");
+                hwgc->state = STEP_DEBUG;
+                hwgc->sub_state = 0;
+
+                hwgc->softPars.par0 = dest_attr_type;
+                hwgc->softPars.par1 = min_word_size;
+                hwgc->softPars.par2 = desired_word_size;
+                hwgc->softPars.par3 = allocator_ptr;
+
+                hwgc->wake_state = STEP_ALLOCATE_DURING_GC;
+                hwgc->wake_sub_state = 12;
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc_raise_irq(hwgc, DEBUG_IRQ);
+                    bql_unlock();
+                }
+                return;
+            }
+            else
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 12)
+        {
+            if (hwgc->wake_state == STEP_ALLOCATE_DURING_GC && hwgc->wake_sub_state == 12)
+            {
+                to_obj = hwgc->softPars.res;
+                actual_plab_size = hwgc->softPars.par3;
+            }
+            if (to_obj == 0)
+            {
+                uintptr_t addr = dest_attr_type == 0 ? allocator_ptr + 0x10 : allocator_ptr + 0x11;
+                originValue = 1;
+                tag = safeAccessHWAddr(hwgc, addr, &originValue, 1, "write allocator_ptr + 0x10/11", true, STEP_ALLOCATE_DURING_GC, 13);
+                if (tag)
+                    hwgc->sub_state = 13;
+            }
+            else
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 13)
+        {
+            originValue = 0;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.lockPtr, &originValue, 8, "write lock ptr", true, STEP_ALLOCATE_DURING_GC, 4);
+            if (tag)
+                hwgc->sub_state = 4;
+        }
+    }
+
+    static uintptr_t alloc_top, alloc_end;
+    static size_t want_to_allocate;
+    if (hwgc->state == STEP_PAR_ALLOCATE_IML)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            tag = safeAccessHWAddr(hwgc, alloc_region + 0x10, &alloc_top, 8, "read alloc region + 0x10", false, STEP_PAR_ALLOCATE_IML, 1);
+            if (tag)
+                hwgc->sub_state = 1;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            tag = safeAccessHWAddr(hwgc, alloc_region + 0x8, &alloc_end, 8, "read alloc region + 0x8", false, STEP_PAR_ALLOCATE_IML, 2);
+            if (tag)
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            size_t available = (alloc_end - alloc_top) / 8;
+            want_to_allocate = available > desired_word_size ? desired_word_size : available;
+            if (want_to_allocate >= min_word_size)
+            {
+                actual_plab_size = want_to_allocate;
+                originValue = alloc_top + want_to_allocate * 8;
+                to_obj = alloc_top;
+                tag = safeAccessHWAddr(hwgc, alloc_region + 0x10, &originValue, 8, "write alloc region + 0x10", true, STEP_PAR_ALLOCATE_IML, 3);
+                if (tag)
+                    hwgc->sub_state = 3;
+            }
+            else
+            {
+                to_obj = 0;
+                hwgc->sub_state = 3;
+            }
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            hwgc->sub_state = par_alloc_iml_sel == 2 ? 1 : (par_alloc_iml_sel == 1 ? 11 : 3);
+            hwgc->state = par_alloc_iml_sel == 2 ? STEP_PAR_ALLOCATE : STEP_ALLOCATE_DURING_GC;
+        }
+    }
+
+    static uintptr_t blk_start, blk_end, bot_part_ptr, bot_ptr;
+    static uintptr_t next_offset_threshold, array, reserved_start, begin;
+    static size_t index, start_card_for_region, start_card, end_card, reach, num_cards;
+    static uint8_t ct_offset;
+    if (hwgc->state == STEP_PAR_ALLOCATE)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            par_alloc_iml_sel = 2;
+            hwgc->state = STEP_PAR_ALLOCATE_IML;
+            hwgc->sub_state = 0;
+            return;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            if (to_obj != 0)
+            {
+                blk_start = to_obj;
+                blk_end = to_obj + actual_plab_size * 8;
+                bot_part_ptr = alloc_region + 0x20;
+                tag = safeAccessHWAddr(hwgc, bot_part_ptr, &next_offset_threshold, 8, "read next offset threshold", false, STEP_PAR_ALLOCATE, 2);
+                if (tag)
+                    hwgc->sub_state = 2;
+            }
+            else
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            if (blk_end > next_offset_threshold)
+            {
+                tag = safeAccessHWAddr(hwgc, bot_part_ptr + 0x8, &index, 8, "read botpart index", false, STEP_PAR_ALLOCATE, 3);
+                if (tag)
+                    hwgc->sub_state = 3;
+            }
+            else
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            tag = safeAccessHWAddr(hwgc, bot_part_ptr + 0x10, &bot_ptr, 8, "read bot ptr", false, STEP_PAR_ALLOCATE, 4);
+            if (tag)
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            tag = safeAccessHWAddr(hwgc, bot_ptr + 0x10, &array, 8, "read bot array", false, STEP_PAR_ALLOCATE, 5);
+            if (tag)
+                hwgc->sub_state = 5;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            originValue = (next_offset_threshold - blk_start) / 8;
+            tag = safeAccessHWAddr(hwgc, array + index, &originValue, 8, "write array index", true, STEP_PAR_ALLOCATE, 6);
+            if (tag)
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            tag = safeAccessHWAddr(hwgc, bot_ptr, &reserved_start, 8, "read bot ptr", false, STEP_PAR_ALLOCATE, 7);
+            if (tag)
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            size_t end_index = (blk_end - 8 - reserved_start) >> 9;
+            uintptr_t rem_st = reserved_start + ((index + 1) << 6) * 8;
+            uintptr_t rem_end = reserved_start + ((end_index << 6) + 64) * 8;
+            start_card = (rem_st - reserved_start) >> 9;
+            end_card = (rem_end - 8 - reserved_start) >> 9;
+            if (index + 1 <= end_index && rem_st < rem_end && start_card <= end_card)
+            {
+                start_card_for_region = start_card;
+                ct_offset = 0xff;
+                i = 0;
+                hwgc->sub_state = 8;
+            }
+            else
+                hwgc->sub_state = 11;
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            if (i < 14)
+            {
+                reach = start_card - 1 + ((1 << (4 * (i + 1))) - 1);
+                ct_offset = 64 + i;
+                num_cards = (reach >= end_card ? end_card : reach) - start_card_for_region + 1;
+                begin = array + start_card_for_region;
+                ++i;
+                hwgc->sub_state = 9;
+            }
+            else
+                hwgc->sub_state = 11;
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            if (num_cards > 0)
+            {
+                originValue = begin;
+                ++begin;
+                --num_cards;
+                tag = safeAccessHWAddr(hwgc, originValue, &ct_offset, 1, "write begin", true, STEP_PAR_ALLOCATE, 9);
+                if (tag)
+                    hwgc->sub_state = 9;
+            }
+            else
+                hwgc->sub_state = 10;
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            start_card_for_region = reach + 1;
+            if (reach >= end_card)
+                hwgc->sub_state = 11;
+            else
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 11)
+        {
+            size_t end_index = (blk_end - 8 - reserved_start) >> 9;
+            index = end_index + 1;
+            next_offset_threshold = reserved_start + ((end_index << 6) + 64) * 8;
+            tag = safeAccessHWAddr(hwgc, bot_part_ptr, &next_offset_threshold, 8, "write next offset threshold", true, STEP_PAR_ALLOCATE, 12);
+            if (tag)
+                hwgc->sub_state = 12;
+        }
+
+        if (hwgc->sub_state == 12)
+        {
+            tag = safeAccessHWAddr(hwgc, bot_part_ptr + 0x8, &index, 8, "write bot part index", true, STEP_PAR_ALLOCATE, 13);
+            if (tag)
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 13)
+        {
+            hwgc->sub_state = par_alloc_sel ? 11 : 3;
+            hwgc->state = STEP_ALLOCATE_DURING_GC;
+        }
+    }
+
+    if (hwgc->state == STEP_ATTEMPT_ALLOC)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            if (alloc_region != hwgc->pars.dummyRegion)
+            {
+                tag = safeAccessHWAddr(hwgc, alloc_region, &alloc_end, 8, "read alloc region", false, STEP_ATTEMPT_ALLOC, 1);
+                if (tag)
+                    hwgc->sub_state = 1;
+            }
+            else
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            tag = safeAccessHWAddr(hwgc, alloc_region, &alloc_end, 8, "read alloc region", false, STEP_ATTEMPT_ALLOC, 1);
+            if (tag)
+                hwgc->sub_state = 1;
         }
     }
 
@@ -1198,9 +1993,8 @@ static void do_hwgc_work(void *opaque)
         }
     }
 
-    static uintptr_t byte_map, byte_map_base, res;
+    static uintptr_t byte_map, res;
     static size_t card_index, last_index;
-    static size_t index;
     static uintptr_t node_allocator_ptr, node, old_node, new_top;
     if (hwgc->state == STEP_AOP)
     {
@@ -1512,6 +2306,7 @@ static void *hwgc_work_thread(void *opaque)
                         printf("write success\n");
 #endif
                 }
+
                 hwgc->state = hwgc->wake_state;
                 hwgc->sub_state = hwgc->wake_sub_state;
                 qatomic_and(&hwgc->status, ~HWGC_STATUS_WAKE);
