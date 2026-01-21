@@ -939,7 +939,7 @@ static void do_hwgc_work(void *opaque)
             if (dest_attr_type == 0)
                 plab_stats_ptr = hwgc->pars.g1h + 0x250;
             else if (dest_attr_type == 1)
-                plab_stats_ptr = hwgc->pars.g1h + 0x2d0;
+                plab_stats_ptr = hwgc->pars.g1h + 0x2e0;
 
             tag = safeAccessHWAddr(hwgc, plab_stats_ptr + 0x30, &originValue, 8, "read plab stats ptr + 0x30", false, STEP_ALLOCATE_DIRECT, 1);
             if (tag)
@@ -1102,23 +1102,6 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 16)
         {
-            // hwgc->state = STEP_DEBUG;
-            // hwgc->sub_state = 0;
-
-            // hwgc->softPars.par0 = dest_attr_type;
-            // hwgc->softPars.par1 = required_in_plab;
-            // hwgc->softPars.par2 = plab_word_size;
-            // hwgc->softPars.par3 = allocator_ptr;
-
-            // hwgc->wake_state = STEP_ALLOCATE_DIRECT;
-            // hwgc->wake_sub_state = 17;
-            // if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
-            //{
-            //     bql_lock();
-            //     hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
-            //     bql_unlock();
-            // }
-            // return;
             hwgc->state = STEP_ALLOCATE_DURING_GC;
             hwgc->sub_state = 0;
             min_word_size = required_in_plab;
@@ -1129,8 +1112,6 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 17)
         {
-            // actual_plab_size = hwgc->softPars.par3;
-            // to_obj = hwgc->softPars.res;
             if (to_obj != 0)
             {
                 tag = safeAccessHWAddr(hwgc, buffer + 0x20, &actual_plab_size, 8, "write buffer + 0x20", true, STEP_ALLOCATE_DIRECT, 18);
@@ -1284,7 +1265,7 @@ static void do_hwgc_work(void *opaque)
         {
             if (to_obj == 0)
             {
-                tag = safeAccessHWAddr(hwgc, allocator_ptr, &originValue, 1, "read is full value", false, STEP_ALLOCATE_DURING_GC, 9);
+                tag = safeAccessHWAddr(hwgc, allocator_ptr + 0x10, &originValue, 1, "read is full value", false, STEP_ALLOCATE_DURING_GC, 9);
                 if (tag)
                     hwgc->sub_state = 9;
             }
@@ -1527,7 +1508,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 5)
         {
             originValue = (next_offset_threshold - blk_start) / 8;
-            tag = safeAccessHWAddr(hwgc, array + index, &originValue, 8, "write array index", true, STEP_PAR_ALLOCATE, 6);
+            tag = safeAccessHWAddr(hwgc, array + index, &originValue, 1, "write array index", true, STEP_PAR_ALLOCATE, 6);
             if (tag)
                 hwgc->sub_state = 6;
         }
