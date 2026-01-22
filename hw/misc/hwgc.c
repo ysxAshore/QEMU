@@ -5,7 +5,7 @@
 typedef struct HWGCState HWGCState;
 DECLARE_INSTANCE_CHECKER(HWGCState, HWGC, TYPE_PCI_HWGC_DEVICE)
 
-#define HWGC_TLB_SIZE 1048576
+#define HWGC_TLB_SIZE 1048576 * 16
 
 typedef struct
 {
@@ -54,7 +54,7 @@ static uint64_t get_soft_par3(HWGCState *s) { return s->softPars.par3; }
 static inline unsigned int hwgc_tlb_hash(uintptr_t va_page)
 {
     // return qemu_xxhash2((va_page >> 12)) % (HWGC_TLB_SIZE);
-    return (va_page >> 12) & 0xfffff;
+    return (va_page >> 12) & 0xffffff;
 }
 static inline void flush_hwgc_tlb(HWGCState *hwgc)
 {
@@ -64,9 +64,6 @@ static hwaddr hwgc_translate_va(HWGCState *hwgc, uintptr_t va)
 {
     uintptr_t va_page = va & TARGET_PAGE_MASK;
     unsigned int idx = hwgc_tlb_hash(va_page);
-#ifdef DEBUG_ENABLE
-    printf("the va page %lx the idx is %d\n", va_page, idx);
-#endif
     HWGCTLBEntry *entry = &hwgc->tlb_cache[idx];
 
     if (entry->va_page == va_page)
@@ -1221,6 +1218,7 @@ static void do_hwgc_work(void *opaque)
     static uintptr_t card_table_ptr, byte_map_base, first, last;
     static int par_alloc_iml_sel;
     static int par_alloc_sel;
+    static bool bot_updates;
     if (hwgc->state == STEP_ALLOCATE_DURING_GC)
     {
         if (hwgc->sub_state == 0)
@@ -1256,6 +1254,7 @@ static void do_hwgc_work(void *opaque)
             else
             {
                 par_alloc_sel = 0;
+                bot_updates = true;
                 hwgc->state = STEP_PAR_ALLOCATE;
                 hwgc->sub_state = 0;
             }
@@ -1345,6 +1344,7 @@ static void do_hwgc_work(void *opaque)
             else
             {
                 par_alloc_sel = 1;
+                bot_updates = true;
                 hwgc->state = STEP_PAR_ALLOCATE;
                 hwgc->sub_state = 0;
             }
@@ -1354,24 +1354,26 @@ static void do_hwgc_work(void *opaque)
         {
             if (to_obj == 0)
             {
-                printf("needs allocate\n");
-                hwgc->state = STEP_DEBUG;
+                // printf("needs allocate\n");
+                // hwgc->state = STEP_DEBUG;
+                // hwgc->sub_state = 0;
+
+                // hwgc->softPars.par0 = dest_attr_type;
+                // hwgc->softPars.par1 = min_word_size;
+                // hwgc->softPars.par2 = desired_word_size;
+                // hwgc->softPars.par3 = allocator_ptr;
+
+                // hwgc->wake_state = STEP_ALLOCATE_DURING_GC;
+                // hwgc->wake_sub_state = 12;
+                // if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                //{
+                //     bql_lock();
+                //     hwgc_raise_irq(hwgc, DEBUG_IRQ);
+                //     bql_unlock();
+                // }
+                // return;
+                hwgc->state = STEP_ATTEMPT_ALLOC;
                 hwgc->sub_state = 0;
-
-                hwgc->softPars.par0 = dest_attr_type;
-                hwgc->softPars.par1 = min_word_size;
-                hwgc->softPars.par2 = desired_word_size;
-                hwgc->softPars.par3 = allocator_ptr;
-
-                hwgc->wake_state = STEP_ALLOCATE_DURING_GC;
-                hwgc->wake_sub_state = 12;
-                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
-                {
-                    bql_lock();
-                    hwgc_raise_irq(hwgc, DEBUG_IRQ);
-                    bql_unlock();
-                }
-                return;
             }
             else
                 hwgc->sub_state = 13;
@@ -1379,11 +1381,11 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 12)
         {
-            if (hwgc->wake_state == STEP_ALLOCATE_DURING_GC && hwgc->wake_sub_state == 12)
-            {
-                to_obj = hwgc->softPars.res;
-                actual_plab_size = hwgc->softPars.par3;
-            }
+            // if (hwgc->wake_state == STEP_ALLOCATE_DURING_GC && hwgc->wake_sub_state == 12)
+            //{
+            //     to_obj = hwgc->softPars.res;
+            //     actual_plab_size = hwgc->softPars.par3;
+            // }
             if (to_obj == 0)
             {
                 uintptr_t addr = dest_attr_type == 0 ? allocator_ptr + 0x10 : allocator_ptr + 0x11;
@@ -1596,30 +1598,503 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 13)
         {
-            hwgc->sub_state = par_alloc_sel ? 11 : 3;
-            hwgc->state = STEP_ALLOCATE_DURING_GC;
+            hwgc->sub_state = par_alloc_sel == 2 ? 17 : (par_alloc_sel == 1 ? 11 : 3);
+            hwgc->state = par_alloc_sel == 2 ? STEP_ATTEMPT_ALLOC : STEP_ALLOCATE_DURING_GC;
         }
     }
 
+    static size_t allocated_bytes;
+    static int8_t type;
+    static uintptr_t new_alloc_region;
     if (hwgc->state == STEP_ATTEMPT_ALLOC)
     {
         if (hwgc->sub_state == 0)
         {
             if (alloc_region != hwgc->pars.dummyRegion)
-            {
-                tag = safeAccessHWAddr(hwgc, alloc_region, &alloc_end, 8, "read alloc region", false, STEP_ATTEMPT_ALLOC, 1);
-                if (tag)
-                    hwgc->sub_state = 1;
-            }
+                TRY_R(1, alloc_region, &alloc_end, 8, "read alloc region", STEP_ATTEMPT_ALLOC);
             else
                 hwgc->sub_state = 2;
         }
 
         if (hwgc->sub_state == 1)
+            TRY_R(2, alloc_region + 0x10, &alloc_top, 8, "read alloc region + 0x10", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 2)
+            TRY_R(3, region_ptr + 0x18, &originValue, 8, "read region ptr + 0x18", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 3)
         {
-            tag = safeAccessHWAddr(hwgc, alloc_region, &alloc_end, 8, "read alloc region", false, STEP_ATTEMPT_ALLOC, 1);
+            allocated_bytes = alloc_top - alloc_end - originValue;
+            TRY_R(4, hwgc->pars.g1h + 0x240, &originValue, 8, "read g1h + 0x240", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            originValue = originValue + allocated_bytes;
+            TRY_W(5, hwgc->pars.g1h + 0x240, &originValue, 8, "write g1h + 0x240", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 5)
+            TRY_R(6, region_ptr + 0x40, &type, 1, "read purpose attr", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 6)
+        {
+            uintptr_t ptr = type == 1 ? hwgc->pars.g1h + 0xa0 : hwgc->pars.g1h + 0x3f8;
+            TRY_R(7, ptr, &originValue, 8, "read oldset or survivor", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            uintptr_t ptr = hwgc->pars.g1h + (type == 1 ? 0xa0 : 0x3f8);
+            originValue = originValue + (type == 1 ? 1 : allocated_bytes);
+            TRY_W(8, ptr, &originValue, 8, "write oldset or survivor", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            originValue = 0;
+            TRY_W(9, region_ptr + 0x18, &originValue, 8, "write used byte before", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 9)
+            TRY_W(10, region_ptr + 0x8, &hwgc->pars.dummyRegion, 8, "write alloc region", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 10)
+        {
+            printf("needs allocate\n");
+            hwgc->state = STEP_DEBUG;
+            hwgc->sub_state = 0;
+
+            hwgc->softPars.par0 = region_ptr;
+            hwgc->softPars.par1 = desired_word_size;
+
+            hwgc->wake_state = STEP_ATTEMPT_ALLOC;
+            hwgc->wake_sub_state = 11;
+            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            {
+                bql_lock();
+                hwgc_raise_irq(hwgc, DEBUG_IRQ);
+                bql_unlock();
+            }
+            return;
+            // hwgc->state = STEP_NEW_GC_ALLOC;
+            // hwgc->sub_state = 0;
+        }
+
+        if (hwgc->sub_state == 11)
+        {
+            // to_obj = hwgc->softPars.res;
+            // actual_plab_size = hwgc->softPars.par3;
+            // hwgc->state = STEP_ALLOCATE_DURING_GC;
+            // hwgc->sub_state = 12;
+            new_alloc_region = hwgc->softPars.res;
+            if (new_alloc_region != 0)
+            {
+                originValue = 0;
+                TRY_W(12, new_alloc_region + 0xa8, &originValue, 8, "write pre dummy top", STEP_ATTEMPT_ALLOC);
+            }
+            else
+                hwgc->sub_state = 20;
+        }
+
+        if (hwgc->sub_state == 12)
+            TRY_R(13, new_alloc_region, &alloc_end, 8, "read new alloc region", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 13)
+            TRY_R(14, new_alloc_region + 0x10, &alloc_top, 8, "read new alloc region + 0x10", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 14)
+        {
+            originValue = alloc_top - alloc_end;
+            TRY_W(15, region_ptr + 0x18, &originValue, 8, "write region ptr + 0x18", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 15)
+            TRY_R(16, region_ptr + 0x20, &bot_updates, 1, "read bot updates", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 16)
+        {
+            alloc_region = new_alloc_region;
+            min_word_size = desired_word_size;
+
+            par_alloc_sel = 2;
+            hwgc->state = STEP_PAR_ALLOCATE;
+            hwgc->sub_state = 0;
+            return;
+        }
+
+        if (hwgc->sub_state == 17)
+            TRY_W(18, region_ptr + 0x8, &new_alloc_region, 8, "write region ptr + 0x8", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 18)
+            TRY_R(19, region_ptr + 0x10, &originValue, 4, "read region ptr + 0x10", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 19)
+        {
+            originValue = originValue + 1;
+            TRY_W(20, region_ptr + 0x10, &originValue, 4, "write region ptr + 0x10", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 20)
+        {
+            if (new_alloc_region != 0 && to_obj != 0)
+                actual_plab_size = desired_word_size;
+            else
+                to_obj = 0;
+            hwgc->state = STEP_ALLOCATE_DURING_GC;
+            hwgc->sub_state = 12;
+            return;
+        }
+    }
+
+    static uint region_node_index, array_len, array_max;
+    static uintptr_t policy_ptr, grow_array_ptr, data_ptr, count_per_node, numa;
+    static bool expand_failure;
+    if (hwgc->state == STEP_NEW_GC_ALLOC)
+    {
+        if (hwgc->sub_state == 0)
+            TRY_R(1, region_ptr + 0x30, &region_node_index, 4, "read region node index", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 1)
+            TRY_R(2, hwgc->pars.g1h + 0x3f8 + 0x8, &grow_array_ptr, 8, "read grow array ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 2)
+            TRY_R(3, hwgc->pars.g1h + 0x430, &policy_ptr, 8, "read policy ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 3)
+        {
+            heap_region_type = type == 1 ? 0x10 : 0x3;
+
+            printf("needs allocate\n");
+            hwgc->state = STEP_DEBUG;
+            hwgc->sub_state = 0;
+
+            hwgc->softPars.par0 = desired_word_size;
+            hwgc->softPars.par1 = heap_region_type;
+            hwgc->softPars.par2 = region_node_index;
+
+            hwgc->wake_state = STEP_NEW_GC_ALLOC;
+            hwgc->wake_sub_state = 4;
+            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            {
+                bql_lock();
+                hwgc_raise_irq(hwgc, DEBUG_IRQ);
+                bql_unlock();
+            }
+            return;
+        }
+
+        if (hwgc->sub_state == 22)
+        {
+            new_alloc_region = hwgc->softPars.res;
+            TRY_R(23, hwgc->pars.g1h + 0x370, &expand_failure, 1, "read expand faiulre", STEP_NEW_GC_ALLOC);
+        }
+
+        if (hwgc->sub_state == 23)
+        {
+            if (new_alloc_region == 0 && (expand_failure & 0xff))
+            {
+            }
+            else
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 24)
+        {
+            tag = hwgc->softPars.res & 0xff;
+            originValue = 0;
             if (tag)
-                hwgc->sub_state = 1;
+            {
+            }
+            else
+                TRY_W(4, hwgc->pars.g1h + 0x370, &originValue, 1, "write expand faiulre", STEP_NEW_GC_ALLOC);
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            new_alloc_region = hwgc->softPars.res;
+            hwgc->sub_state = 21;
+            // if (new_alloc_region != 0)
+            //     TRY_W(5, new_alloc_region + 0xbc, &heap_region_type, 4, "write heap reion type", STEP_NEW_GC_ALLOC);
+            // else
+            //     hwgc->sub_state = 21;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            if (heap_region_type == 0x3)
+                TRY_R(6, grow_array_ptr, &originValue, 8, "read grow array len and max", STEP_NEW_GC_ALLOC);
+            else
+                hwgc->sub_state = 16;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            array_max = originValue >> 32;
+            array_len = (uint)originValue;
+            if (array_len == array_max)
+            {
+                printf("needs grow\n");
+                hwgc->state = STEP_DEBUG;
+                hwgc->sub_state = 0;
+
+                hwgc->softPars.par0 = grow_array_ptr;
+                hwgc->softPars.par1 = array_len;
+
+                hwgc->wake_state = STEP_NEW_GC_ALLOC;
+                hwgc->wake_sub_state = 7;
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc_raise_irq(hwgc, ALLOC_SLOW_IRQ);
+                    bql_unlock();
+                }
+                return;
+            }
+            else
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            originValue = array_len + 1;
+            TRY_W(8, grow_array_ptr, &originValue, 4, "write grow array len", STEP_NEW_GC_ALLOC);
+        }
+
+        if (hwgc->sub_state == 8)
+            TRY_R(9, grow_array_ptr + 0x8, &data_ptr, 8, "read grow array data ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 9)
+            TRY_W(10, data_ptr + array_len * 8, &new_alloc_region, 8, "write data ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 10)
+            TRY_R(11, hwgc->pars.g1h + 0x3f8 + 0x18, &count_per_node, 8, "read count per node ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 11)
+            TRY_R(12, hwgc->pars.g1h + 0x3f8 + 0x20, &numa, 8, "read numa", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 12)
+            TRY_R(13, numa + 0x18, &originValue, 4, "read active node ids", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 13)
+            TRY_R(14, new_alloc_region + 0x120, &array_len, 4, "read new node index", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 14)
+        {
+            if (array_len < originValue)
+                TRY_R(15, count_per_node + array_len * 4, &originValue, 4, "read count per node + new node index * 4", STEP_NEW_GC_ALLOC);
+            else
+                hwgc->sub_state = 16;
+        }
+
+        if (hwgc->sub_state == 15)
+        {
+            originValue = originValue + 1;
+            TRY_W(16, count_per_node + array_len * 4, &originValue, 4, "write count per node + new node index * 4", STEP_NEW_GC_ALLOC);
+        }
+
+        if (hwgc->sub_state == 16)
+            TRY_R(17, new_alloc_region + 0xb0, &count_per_node, 8, "read remset ptr", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 17)
+            TRY_R(18, new_alloc_region + 0xb8, &originValue, 8, "read hrm index and type", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 18)
+        {
+            array_len = originValue >> 32;
+            array_max = (uint)originValue;
+            originValue = (array_len & 0x2) != 0 ? 2 : ((array_len & 0x10) != 0 ? 0 : 1);
+            if (originValue != 1)
+                TRY_W(19, count_per_node + 0xf0, &originValue, 4, "write state ptr", STEP_NEW_GC_ALLOC);
+            else
+                hwgc->sub_state = 19;
+        }
+
+        if (hwgc->sub_state == 19)
+            TRY_R(20, hwgc->pars.g1h + 0x580 + 0x10, &count_per_node, 8, "read region attr base", STEP_NEW_GC_ALLOC);
+
+        if (hwgc->sub_state == 20)
+        {
+            bool needs_remset_update = (array_len & 0x10) == 0;
+            TRY_W(21, count_per_node + array_max * 2, &needs_remset_update, 1, "write region attr base + hrm index * 2", STEP_NEW_GC_ALLOC);
+        }
+
+        if (hwgc->sub_state == 21)
+        {
+            hwgc->sub_state = 11;
+            hwgc->state = STEP_ATTEMPT_ALLOC;
+            return;
+        }
+    }
+
+    static bool from_head;
+    static uint active_node_ids, region_size, page_size, cur_depth, max_depth;
+    static uintptr_t free_list_ptr, cur, prev, next;
+    if (hwgc->state == STEP_ALLOC_FREE_REGION)
+    {
+        if (hwgc->sub_state == 0)
+            TRY_R(1, hwgc->pars.numaPtr + 0x18, &active_node_ids, 4, "read active node ids", STEP_ALLOC_FREE_REGION);
+
+        if (hwgc->sub_state == 1)
+        {
+            new_alloc_region = 0;
+            free_list_ptr = hwgc->pars.g1h + 0x130 + 0xb0;
+            from_head = (heap_region_type & 0x2) == 0;
+            if (region_node_index != UINT_MAX - 1 && active_node_ids > 1)
+                TRY_R(2, hwgc->pars.numaPtr + 0x20, &region_size, 4, "read region size", STEP_ALLOC_FREE_REGION);
+            else
+                hwgc->sub_state = 12;
+        }
+
+        if (hwgc->sub_state == 2)
+            TRY_R(3, hwgc->pars.numaPtr + 0x28, &page_size, 4, "read page size", STEP_ALLOC_FREE_REGION);
+
+        if (hwgc->sub_state == 3)
+        {
+            cur_depth = 0;
+            max_depth = 3 * MAX((uint)(page_size / region_size), 1u) * active_node_ids;
+            uintptr_t addr = free_list_ptr + (from_head ? 0x28 : 0x30);
+            TRY_R(4, addr, &cur, 8, "read cur", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (cur != 0 && cur_depth < max_depth)
+                TRY_R(5, cur + 0x120, &originValue, 4, "read node index", STEP_ALLOC_FREE_REGION);
+            else
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            if (region_node_index == (uint)originValue)
+                hwgc->sub_state = 6;
+            else
+            {
+                ++cur_depth;
+                uintptr_t addr = cur + (from_head ? 0xd0 : 0xd8);
+                TRY_R(4, addr, &cur, 8, "read next cur", STEP_ALLOC_FREE_REGION);
+            }
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            if (cur == 0 || cur_depth >= max_depth)
+            {
+                new_alloc_region = 0;
+                hwgc->sub_state = 12;
+            }
+            else
+            {
+                new_alloc_region = cur;
+                TRY_R(7, new_alloc_region + 0xd8, &prev, 8, "read prev", STEP_ALLOC_FREE_REGION);
+            }
+        }
+
+        if (hwgc->sub_state == 7)
+            TRY_R(8, new_alloc_region + 0xd0, &next, 8, "read next", STEP_ALLOC_FREE_REGION);
+
+        if (hwgc->sub_state == 8)
+        {
+            uintptr_t addr = prev == 0 ? free_list_ptr + 0x28 : prev + 0xd0;
+            TRY_W(9, addr, &next, 8, "write value next", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            uintptr_t addr = next == 0 ? free_list_ptr + 0x30 : prev + 0xd8;
+            TRY_W(10, addr, &prev, 8, "write value prev", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            originValue = 0;
+            TRY_W(11, new_alloc_region + 0xd0, &originValue, 8, "write next region", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 11)
+            TRY_W(12, new_alloc_region + 0xd8, &originValue, 8, "write prev region", STEP_ALLOC_FREE_REGION);
+
+        if (hwgc->sub_state == 12)
+            TRY_R(13, free_list_ptr + 0x10, &active_node_ids, 4, "read length", STEP_ALLOC_FREE_REGION);
+
+        if (hwgc->sub_state == 13)
+        {
+            if (new_alloc_region == 0)
+            {
+                if (active_node_ids == 0)
+                {
+                    new_alloc_region = 0;
+                    hwgc->sub_state = 18;
+                }
+                else
+                {
+                    uintptr_t addr = free_list_ptr + (from_head ? 0x28 : 0x30);
+                    TRY_R(14, addr, &new_alloc_region, 8, "read new alloc region", STEP_ALLOC_FREE_REGION);
+                }
+            }
+            else
+                hwgc->sub_state = 18;
+        }
+
+        if (hwgc->sub_state == 14)
+        {
+            uintptr_t addr = new_alloc_region + (from_head ? 0xd0 : 0xd8);
+            TRY_R(15, addr, &originValue, 8, "read region next or prev", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 15)
+        {
+            uintptr_t addr = free_list_ptr + (from_head ? 0x28 : 0x30);
+            TRY_R(16, addr, &originValue, 8, "write region next or prev", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 16)
+        {
+            uintptr_t addr;
+            if (from_head)
+                addr = originValue == 0 ? free_list_ptr + 0x30 : originValue + 0xd8;
+            else
+                addr = originValue == 0 ? free_list_ptr + 0x28 : originValue + 0xd0;
+            originValue = 0;
+            TRY_W(17, addr, &originValue, 8, "write 0", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 17)
+        {
+            uintptr_t addr = new_alloc_region + (from_head ? 0xd0 : 0xd8);
+            TRY_W(18, addr, &originValue, 8, "write region next or prev", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 18)
+        {
+            if (new_alloc_region != 0)
+                TRY_R(19, free_list_ptr + 0x38, &originValue, 8, "read last ptr", STEP_ALLOC_FREE_REGION);
+            else
+                hwgc->sub_state = 21;
+        }
+
+        if (hwgc->sub_state == 19)
+        {
+            if (originValue == new_alloc_region)
+            {
+                originValue = 0;
+                TRY_W(20, free_list_ptr + 0x38, &originValue, 8, "write last ptr", STEP_ALLOC_FREE_REGION);
+            }
+            else
+                hwgc->sub_state = 20;
+        }
+
+        if (hwgc->sub_state == 20)
+        {
+            active_node_ids -= 1;
+            TRY_W(21, free_list_ptr + 0x10, &active_node_ids, 4, "write length", STEP_ALLOC_FREE_REGION);
+        }
+
+        if (hwgc->sub_state == 21)
+        {
+            hwgc->sub_state = 10;
+            hwgc->state = STEP_NEW_GC_ALLOC;
         }
     }
 
@@ -2263,9 +2738,9 @@ static void *hwgc_work_thread(void *opaque)
 
         qemu_mutex_unlock(&hwgc->thr_mutex);
 
-#ifdef DEBUG_ENABLE
+        // #ifdef DEBUG_ENABLE
         printf("do hwgc work\n");
-#endif
+        // #endif
 
         while (1)
         {
@@ -2295,9 +2770,9 @@ static void *hwgc_work_thread(void *opaque)
             }
         }
 
-#ifdef DEBUG_ENABLE
+        // #ifdef DEBUG_ENABLE
         printf("do hwgc end\n");
-#endif
+        // #endif
         qatomic_and(&hwgc->status, ~HWGC_STATUS_COMPUTING);
         smp_mb__after_rmw();
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)

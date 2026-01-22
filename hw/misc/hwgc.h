@@ -132,3 +132,21 @@ enum HWGC_EXEC_STEP
 
     STEP_DONE,
 };
+
+#define TRY_R(next, addr, buf, sz, msg, id)                                            \
+    do                                                                                 \
+    {                                                                                  \
+        tag = safeAccessHWAddr(hwgc, (addr), (buf), (sz), (msg), false, (id), (next)); \
+        if (!tag)                                                                      \
+            return;                                                                    \
+        hwgc->sub_state = (next);                                                      \
+    } while (0)
+
+#define TRY_W(next, addr, buf, sz, msg, id)                                           \
+    do                                                                                \
+    {                                                                                 \
+        tag = safeAccessHWAddr(hwgc, (addr), (buf), (sz), (msg), true, (id), (next)); \
+        if (!tag)                                                                     \
+            return;                                                                   \
+        hwgc->sub_state = (next);                                                     \
+    } while (0)
