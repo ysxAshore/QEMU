@@ -35,7 +35,7 @@ struct HWGCState
     HWGCTLBEntry tlb_cache[HWGC_TLB_SIZE];
 };
 
-static uint page_fault, enqueued_irq, alloc_irq, grow_irq;
+static uint page_fault, enqueue_irq, alloc_irq, grow_irq;
 
 static uint64_t get_device_id(HWGCState *s) { return HWGC_DEVICE_ID; }
 static uint64_t get_status(HWGCState *s) { return qatomic_read(&s->status); }
@@ -124,7 +124,6 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
     if (ret == -1)
     {
         ++page_fault;
-
         uint64_t value = 0;
         if (size <= 8 && size > 0)
             memcpy(&value, data, size);
@@ -310,6 +309,7 @@ static void do_hwgc_work(void *opaque)
             {
                 hwgc->state = STEP_DONE;
                 hwgc->sub_state = 0;
+                printf("page fault %d, enqueue irq %d, alloc irq %d, grow irq %d\n", page_fault, enqueue_irq, alloc_irq, grow_irq);
 #ifdef DEBUG_ENABLE
                 printf("The jvm taskqueue has handled over, and now enter the state %x\n", STEP_DONE);
 #endif
@@ -1413,7 +1413,6 @@ static void do_hwgc_work(void *opaque)
         {
             if (new_alloc_region == 0 && (expand_failure & 0xff))
             {
-                ++alloc_irq;
                 hwgc->state = STEP_DEBUG;
                 hwgc->sub_state = 0;
 
@@ -1470,7 +1469,6 @@ static void do_hwgc_work(void *opaque)
             array_len = (uint)originValue;
             if (array_len == array_max)
             {
-                ++grow_irq;
                 hwgc->state = STEP_DEBUG;
                 hwgc->sub_state = 0;
 
@@ -1792,9 +1790,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 3)
         {
             array_localBot = (array_localBot + 1) & ((1 << 17) - 1);
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "write taskqueue bottom addr", true, STEP_TRACE, 4);
-            if (tag)
-                hwgc->sub_state = 4;
+            TRY_W(4, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "write taskqueue bottom addr", STEP_TRACE);
         }
 
         if (hwgc->sub_state == 4)
@@ -1819,11 +1815,7 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 5)
-        {
-            tag = safeAccessHWAddr(hwgc, klass_ptr + 296, &originValue, 8, "read itable len and nonStaticOopMap", false, STEP_TRACE, 6);
-            if (tag)
-                hwgc->sub_state = 6;
-        }
+            TRY_R(6, klass_ptr + 296, &originValue, 8, "read itable len and nonStaticOopMap", STEP_TRACE);
 
         if (hwgc->sub_state == 6)
         {
@@ -1839,9 +1831,7 @@ static void do_hwgc_work(void *opaque)
             if (start_map < end_map)
             {
                 end_map -= 8;
-                tag = safeAccessHWAddr(hwgc, end_map, &originValue, 8, "read count and offset", false, STEP_TRACE, 8);
-                if (tag)
-                    hwgc->sub_state = 8;
+                TRY_R(8, end_map, &originValue, 8, "read count and offset", STEP_TRACE);
             }
             else
                 hwgc->sub_state = 9;
@@ -1867,11 +1857,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 9)
         {
             if (kid == 2)
-            {
-                tag = safeAccessHWAddr(hwgc, from_obj + 40, &staticCount, 4, "read static count", false, STEP_TRACE, 10);
-                if (tag)
-                    hwgc->sub_state = 10;
-            }
+                TRY_R(10, from_obj + 40, &staticCount, 4, "read static count", STEP_TRACE);
             else if (kid == 1)
             {
                 i = 0;
@@ -1961,11 +1947,7 @@ static void do_hwgc_work(void *opaque)
     if (hwgc->state == STEP_DO_OOP_WORK)
     {
         if (hwgc->sub_state == 0)
-        {
-            tag = safeAccessHWAddr(hwgc, src, &heap_oop, 8, "read heap oop", false, STEP_DO_OOP_WORK, 1);
-            if (tag)
-                hwgc->sub_state = 1;
-        }
+            TRY_R(1, src, &heap_oop, 8, "read heap oop", STEP_DO_OOP_WORK);
 
         if (hwgc->sub_state == 1)
         {
@@ -1974,9 +1956,7 @@ static void do_hwgc_work(void *opaque)
             else
             {
                 uintptr_t region_attr_ptr = hwgc->pars.regionAttrBiasedBase + (heap_oop >> hwgc->pars.regionAttrShiftBy) * 2;
-                tag = safeAccessHWAddr(hwgc, region_attr_ptr, &region_attr, 2, "read region attr", false, STEP_DO_OOP_WORK, 2);
-                if (tag)
-                    hwgc->sub_state = 2;
+                TRY_R(2, region_attr_ptr, &region_attr, 2, "read region attr", STEP_DO_OOP_WORK);
             }
         }
 
@@ -1984,11 +1964,7 @@ static void do_hwgc_work(void *opaque)
         {
             int8_t region_attr_type = region_attr >> 8;
             if (region_attr_type >= 0)
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "read taskqueue bottom addr", false, STEP_DO_OOP_WORK, 7);
-                if (tag)
-                    hwgc->sub_state = 7;
-            }
+                TRY_R(7, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "read taskqueue bottom addr", STEP_DO_OOP_WORK);
             else if (((dest ^ heap_oop) >> hwgc->pars.logOfHRGrainBytes) != 0)
             {
                 if (region_attr_type == -2)
@@ -2003,9 +1979,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 3)
         {
             region = (heap_oop - ((uintptr_t)hwgc->pars.heapRegionBias << hwgc->pars.heapRegionShiftBy)) >> hwgc->pars.logOfHRGrainBytes;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "read bool base value", false, STEP_DO_OOP_WORK, 4);
-            if (tag)
-                hwgc->sub_state = 4;
+            TRY_R(4, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "read bool base value", STEP_DO_OOP_WORK);
         }
 
         if (hwgc->sub_state == 4)
@@ -2015,9 +1989,7 @@ static void do_hwgc_work(void *opaque)
             else
             {
                 bool_base_value = false;
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "write bool base value", true, STEP_DO_OOP_WORK, 5);
-                if (tag)
-                    hwgc->sub_state = 5;
+                TRY_W(5, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "write bool base value", STEP_DO_OOP_WORK);
             }
         }
 
@@ -2025,9 +1997,7 @@ static void do_hwgc_work(void *opaque)
         {
             uintptr_t region_attr_dest = hwgc->pars.regionAttrBase + region * 2;
             int8_t dest_value = -1;
-            tag = safeAccessHWAddr(hwgc, region_attr_dest + 1, &dest_value, 1, "write dest attr type is notincset", true, STEP_DO_OOP_WORK, 6);
-            if (tag)
-                hwgc->sub_state = 6;
+            TRY_W(6, region_attr_dest + 1, &dest_value, 1, "write dest attr type is notincset", STEP_DO_OOP_WORK);
         }
 
         if (hwgc->sub_state == 6)
@@ -2045,18 +2015,12 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 7)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueElemsBase + array_localBot * 8, &dest, 8, "write taskqueue elems", true, STEP_DO_OOP_WORK, 8);
-            if (tag)
-                hwgc->sub_state = 8;
-        }
+            TRY_W(8, hwgc->pars.taskQueueElemsBase + array_localBot * 8, &dest, 8, "write taskqueue elems", STEP_DO_OOP_WORK);
 
         if (hwgc->sub_state == 8)
         {
             array_localBot = (array_localBot + 1) & ((1 << 17) - 1);
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "write taskqueue bottom addr", true, STEP_DO_OOP_WORK, 9);
-            if (tag)
-                hwgc->sub_state = 9;
+            TRY_W(9, hwgc->pars.taskQueueBottomAddr, &array_localBot, 4, "write taskqueue bottom addr", STEP_DO_OOP_WORK);
         }
 
         if (hwgc->sub_state == 9)
@@ -2080,27 +2044,17 @@ static void do_hwgc_work(void *opaque)
                 return;
             }
             else
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.cardTablePtr + 0x38, &byte_map, 8, "read byte map", false, STEP_AOP, 1);
-                if (tag)
-                    hwgc->sub_state = 1;
-            }
+                TRY_R(1, hwgc->pars.cardTablePtr + 0x38, &byte_map, 8, "read byte map", STEP_AOP);
         }
 
         if (hwgc->sub_state == 1)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.cardTablePtr + 0x40, &byte_map_base, 8, "read byte map base", false, STEP_AOP, 2);
-            if (tag)
-                hwgc->sub_state = 2;
-        }
+            TRY_R(2, hwgc->pars.cardTablePtr + 0x40, &byte_map_base, 8, "read byte map base", STEP_AOP);
 
         if (hwgc->sub_state == 2)
         {
             res = byte_map_base + (dest >> 9);
             card_index = res - byte_map;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x1b0, &last_index, 8, "read last enqueued card index", false, STEP_AOP, 3);
-            if (tag)
-                hwgc->sub_state = 3;
+            TRY_R(3, hwgc->pars.parScanThreadStatePtr + 0x1b0, &last_index, 8, "read last enqueued card index", STEP_AOP);
         }
 
         if (hwgc->sub_state == 3)
@@ -2111,19 +2065,13 @@ static void do_hwgc_work(void *opaque)
                 hwgc->sub_state = hwgc->previous_sub_state;
             }
             else
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "read queue index", false, STEP_AOP, 4);
-                if (tag)
-                    hwgc->sub_state = 4;
-            }
+                TRY_R(4, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "read queue index", STEP_AOP);
         }
 
         if (hwgc->sub_state == 4)
         {
             index = index / 8;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "read queue buffer", false, STEP_AOP, 5);
-            if (tag)
-                hwgc->sub_state = 5;
+            TRY_R(5, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "read queue buffer", STEP_AOP);
         }
 
         if (hwgc->sub_state == 5)
@@ -2135,9 +2083,7 @@ static void do_hwgc_work(void *opaque)
                 {
                     originValue = 0;
                     old_node = buffer - 0x10;
-                    tag = safeAccessHWAddr(hwgc, old_node, &originValue, 8, "write old node", true, STEP_AOP, 10);
-                    if (tag)
-                        hwgc->sub_state = 10;
+                    TRY_W(10, old_node, &originValue, 8, "write old node", STEP_AOP);
                 }
                 else
                     hwgc->sub_state = 10;
@@ -2149,25 +2095,17 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 6)
         {
             index = index - 1;
-            tag = safeAccessHWAddr(hwgc, buffer + index * 8, &res, 8, "write buffer index entry", true, STEP_AOP, 7);
-            if (tag)
-                hwgc->sub_state = 7;
+            TRY_W(7, buffer + index * 8, &res, 8, "write buffer index entry", STEP_AOP);
         }
 
         if (hwgc->sub_state == 7)
         {
             index = index * 8;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "write queue index", true, STEP_AOP, 8);
-            if (tag)
-                hwgc->sub_state = 8;
+            TRY_W(8, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "write queue index", STEP_AOP);
         }
 
         if (hwgc->sub_state == 8)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x1b0, &card_index, 8, "write last enqueued card index", true, STEP_AOP, 9);
-            if (tag)
-                hwgc->sub_state = 9;
-        }
+            TRY_W(9, hwgc->pars.parScanThreadStatePtr + 0x1b0, &card_index, 8, "write last enqueued card index", STEP_AOP);
 
         if (hwgc->sub_state == 9)
         {
@@ -2177,53 +2115,36 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 10)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x20, &node_allocator_ptr, 8, "read node allocator ptr", false, STEP_AOP, 11);
-            if (tag)
-                hwgc->sub_state = 11;
-        }
+            TRY_R(11, hwgc->pars.parScanThreadStatePtr + 0x20, &node_allocator_ptr, 8, "read node allocator ptr", STEP_AOP);
 
         if (hwgc->sub_state == 11)
         {
             new_top = 0;
             // @notice: loongarch and x86 this address is not equal
             //          BufferNode::Allocator free_list and free_count
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x80, &node, 8, "read node", false, STEP_AOP, 12);
-            if (tag)
-                hwgc->sub_state = 12;
+            TRY_R(12, node_allocator_ptr + 0x80, &node, 8, "read node", STEP_AOP);
         }
 
         if (hwgc->sub_state == 12)
         {
             if (node != 0)
-            {
-                tag = safeAccessHWAddr(hwgc, node + 0x8, &new_top, 8, "read new top", false, STEP_AOP, 13);
-                if (tag)
-                    hwgc->sub_state = 13;
-            }
+                TRY_R(13, node + 0x8, &new_top, 8, "read new top", STEP_AOP);
             else
                 hwgc->sub_state = 13;
         }
 
         if (hwgc->sub_state == 13)
-        {
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x80, &new_top, 8, "write node", true, STEP_AOP, 14);
-            if (tag)
-                hwgc->sub_state = 14;
-        }
+            TRY_W(14, node_allocator_ptr + 0x80, &new_top, 8, "write node", STEP_AOP);
 
         if (hwgc->sub_state == 14)
         {
             if (node != 0)
             {
                 originValue = 0;
-                tag = safeAccessHWAddr(hwgc, node + 0x8, &originValue, 8, "write node + 0x8", true, STEP_AOP, 15);
-                if (tag)
-                    hwgc->sub_state = 15;
+                TRY_W(15, node + 0x8, &originValue, 8, "write node + 0x8", STEP_AOP);
             }
             else
             {
-                ++enqueued_irq;
                 hwgc->softPars.par0 = node_allocator_ptr;
                 hwgc->state = STEP_DEBUG;
                 hwgc->sub_state = 0;
@@ -2243,18 +2164,12 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 15)
-        {
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x100, &originValue, 8, "read node allocator ptr + 0x100", false, STEP_AOP, 16);
-            if (tag)
-                hwgc->sub_state = 16;
-        }
+            TRY_R(16, node_allocator_ptr + 0x100, &originValue, 8, "read node allocator ptr + 0x100", STEP_AOP);
 
         if (hwgc->sub_state == 16)
         {
             originValue = originValue - 1;
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x100, &originValue, 8, "write node allocator ptr + 0x100", true, STEP_AOP, 17);
-            if (tag)
-                hwgc->sub_state = 17;
+            TRY_W(17, node_allocator_ptr + 0x100, &originValue, 8, "write node allocator ptr + 0x100", STEP_AOP);
         }
 
         if (hwgc->sub_state == 17)
@@ -2262,24 +2177,16 @@ static void do_hwgc_work(void *opaque)
             if (hwgc->wake_state == STEP_AOP && hwgc->wake_sub_state == 17 && hwgc->softPars.par0 == node_allocator_ptr)
                 node = hwgc->softPars.res;
             buffer = node + 0x10;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "write buffer", true, STEP_AOP, 18);
-            if (tag)
-                hwgc->sub_state = 18;
+            TRY_W(18, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "write buffer", STEP_AOP);
         }
 
         if (hwgc->sub_state == 18)
-        {
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr, &index, 8, "read new index", false, STEP_AOP, 19);
-            if (tag)
-                hwgc->sub_state = 19;
-        }
+            TRY_R(19, node_allocator_ptr, &index, 8, "read new index", STEP_AOP);
 
         if (hwgc->sub_state == 19)
         {
             originValue = index * 8;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &originValue, 8, "write index", true, STEP_AOP, 20);
-            if (tag)
-                hwgc->sub_state = 20;
+            TRY_W(20, hwgc->pars.parScanThreadStatePtr + 0x48, &originValue, 8, "write index", STEP_AOP);
         }
 
         if (hwgc->sub_state == 20)
@@ -2287,57 +2194,31 @@ static void do_hwgc_work(void *opaque)
             if (old_node == 0)
                 hwgc->sub_state = 6;
             else
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "read buffer list ptr + 0x10", false, STEP_AOP, 21);
-                if (tag)
-                    hwgc->sub_state = 21;
-            }
+                TRY_R(21, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "read buffer list ptr + 0x10", STEP_AOP);
         }
 
         if (hwgc->sub_state == 21)
         {
             originValue = originValue + index;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "write buffer list ptr + 0x10", true, STEP_AOP, 22);
-            if (tag)
-                hwgc->sub_state = 22;
+            TRY_W(22, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "write buffer list ptr + 0x10", STEP_AOP);
         }
 
         if (hwgc->sub_state == 22)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &originValue, 8, "read buffer list ptr", false, STEP_AOP, 23);
-            if (tag)
-                hwgc->sub_state = 23;
-        }
+            TRY_R(23, hwgc->pars.parScanThreadStatePtr + 0x30, &originValue, 8, "read buffer list ptr", STEP_AOP);
 
         if (hwgc->sub_state == 23)
-        {
-            tag = safeAccessHWAddr(hwgc, old_node + 0x8, &originValue, 8, "write old node + 0x8", true, STEP_AOP, 24);
-            if (tag)
-                hwgc->sub_state = 24;
-        }
+            TRY_W(24, old_node + 0x8, &originValue, 8, "write old node + 0x8", STEP_AOP);
 
         if (hwgc->sub_state == 24)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &old_node, 8, "write buffer list ptr", true, STEP_AOP, 25);
-            if (tag)
-                hwgc->sub_state = 25;
-        }
+            TRY_W(25, hwgc->pars.parScanThreadStatePtr + 0x30, &old_node, 8, "write buffer list ptr", STEP_AOP);
 
         if (hwgc->sub_state == 25)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &originValue, 8, "read buffer list ptr + 0x8", false, STEP_AOP, 26);
-            if (tag)
-                hwgc->sub_state = 26;
-        }
+            TRY_R(26, hwgc->pars.parScanThreadStatePtr + 0x38, &originValue, 8, "read buffer list ptr + 0x8", STEP_AOP);
 
         if (hwgc->sub_state == 26)
         {
             if (originValue == 0)
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &old_node, 8, "write buffer list ptr + 0x8", true, STEP_AOP, 6);
-                if (tag)
-                    hwgc->sub_state = 6;
-            }
+                TRY_W(6, hwgc->pars.parScanThreadStatePtr + 0x38, &old_node, 8, "write buffer list ptr + 0x8", STEP_AOP);
             else
                 hwgc->sub_state = 6;
         }
@@ -2356,11 +2237,9 @@ static void *hwgc_work_thread(void *opaque)
 
         qemu_mutex_unlock(&hwgc->thr_mutex);
 
+#ifdef DEBUG_ENABLE
         printf("do hwgc work\n");
-        page_fault = 0;
-        enqueued_irq = 0;
-        alloc_irq = 0;
-        grow_irq = 0;
+#endif
 
         while (1)
         {
@@ -2390,6 +2269,9 @@ static void *hwgc_work_thread(void *opaque)
             }
         }
 
+#ifdef DEBUG_ENABLE
+        printf("do hwgc end\n");
+#endif
         qatomic_and(&hwgc->status, ~HWGC_STATUS_COMPUTING);
         smp_mb__after_rmw();
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
@@ -2398,8 +2280,6 @@ static void *hwgc_work_thread(void *opaque)
             hwgc_raise_irq(hwgc, COMPLETE_IRQ);
             bql_unlock();
         }
-
-        printf("do hwgc end, page fault %d, enqueued %d, alloc %d, grow %d\n", page_fault, enqueued_irq, alloc_irq, grow_irq);
     }
     return NULL;
 }

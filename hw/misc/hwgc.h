@@ -61,6 +61,14 @@
 #define HWGC_STATUS_WAKE 0x02
 #define HWGC_STATUS_IRQ 0x04
 
+#define HWGC_TLB_SIZE 1048576 * 16
+
+typedef struct
+{
+    vaddr va_page;
+    hwaddr pa_page;
+} HWGCTLBEntry;
+
 struct HWGCParameter
 {
     uint32_t chunkSize;
