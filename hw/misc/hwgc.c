@@ -1,5 +1,6 @@
 #include "hwgc.h"
 #include "qemu/xxhash.h"
+#include <time.h>
 
 #define TYPE_PCI_HWGC_DEVICE "hwgc"
 typedef struct HWGCState HWGCState;
@@ -35,7 +36,17 @@ struct HWGCState
     HWGCTLBEntry tlb_cache[HWGC_TLB_SIZE];
 };
 
+static time_t page_fault_time, start_time, end_time;
+static time_t work_begin, work_end;
 static uint page_fault, enqueued_irq, alloc_irq, grow_irq;
+
+// 获取当前时间（纳秒）
+static inline uint64_t get_time_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
 
 static uint64_t get_device_id(HWGCState *s) { return HWGC_DEVICE_ID; }
 static uint64_t get_status(HWGCState *s) { return qatomic_read(&s->status); }
@@ -124,6 +135,7 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
     if (ret == -1)
     {
         ++page_fault;
+        start_time = get_time_ns();
 
         uint64_t value = 0;
         if (size <= 8 && size > 0)
@@ -153,6 +165,16 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
         return false;
     }
     return true;
+}
+
+static inline bool try_access(HWGCState *hwgc, int next, uintptr_t addr, void *buf, size_t sz,
+                              const char *msg, bool write, int id)
+{
+    bool tag = safeAccessHWAddr(hwgc, addr, buf, sz, msg, write, id, next);
+    if (!tag)
+        return false; // 表示失败，调用者应 return;
+    hwgc->sub_state = next;
+    return true; // 成功
 }
 
 static uint64_t hwgc_mmio_read(void *opaque, hwaddr addr, unsigned size)
@@ -338,18 +360,20 @@ static void do_hwgc_work(void *opaque)
     if (hwgc->state == STEP_DISPATCH)
     {
         hwgc->sub_state = 0;
-        if ((task & 0x3) == 0x0)
+        if ((task & 0x3) == 0x2)
         {
-            hwgc->state = STEP_COMMON_OOP;
+            task = task - 0x2;
+            hwgc->state = STEP_PARTIAL_ARRAY;
 #ifdef DEBUG_ENABLE
-            printf("The task is common oop ptr, now enter the state %x\n", STEP_COMMON_OOP);
+            printf("The task is partial array oop, now enter the state %x\n", STEP_PARTIAL_ARRAY);
 #endif
         }
         else
         {
-            hwgc->state = STEP_PARTIAL_ARRAY;
+            task = task - (task & 0x3);
+            hwgc->state = STEP_COMMON_OOP;
 #ifdef DEBUG_ENABLE
-            printf("The task is partial array oop, now enter the state %x\n", STEP_PARTIAL_ARRAY);
+            printf("The task is common oop ptr, now enter the state %x\n", STEP_COMMON_OOP);
 #endif
         }
     }
@@ -365,22 +389,25 @@ static void do_hwgc_work(void *opaque)
     {
         if (hwgc->sub_state == 0)
         {
-            from_obj = task - 0x2;
+            from_obj = task;
             TRY_R(1, from_obj, &partial_m_value, 8, "read partial markword", STEP_PARTIAL_ARRAY);
         }
 
         if (hwgc->sub_state == 1)
         {
             to_obj = partial_m_value & ~0x3;
+            // @change
             TRY_R(2, from_obj + 16, &partial_from_length, 4, "read partial from obj length", STEP_PARTIAL_ARRAY);
         }
 
         if (hwgc->sub_state == 2)
+            // @change
             TRY_R(3, to_obj + 16, &start, 4, "read partial to obj length", STEP_PARTIAL_ARRAY);
 
         if (hwgc->sub_state == 3)
         {
             int temp = start + hwgc->pars.chunkSize;
+            // @change
             TRY_W(4, to_obj + 16, &temp, 4, "write partial to obj length", STEP_PARTIAL_ARRAY);
         }
 
@@ -430,6 +457,7 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 10)
         {
+            // @change
             scanning_in_young = (heap_region_type & 0x2) != 0;
             uintptr_t low = to_obj + 24 + start * 8;
             uintptr_t high = to_obj + 24 + (start + hwgc->pars.chunkSize) * 8;
@@ -452,14 +480,16 @@ static void do_hwgc_work(void *opaque)
     }
 
     static uintptr_t common_m_value;
-    static uintptr_t copy2survivor_region_attr_ptr;
+    static uintptr_t copy2survivor_region_attr_ptr, originValue;
     static uint16_t region_attr;
     if (hwgc->state == STEP_COMMON_OOP)
     {
         if (hwgc->sub_state == 0)
+            // @change
             TRY_R(1, task, &from_obj, 8, "read common oop task", STEP_COMMON_OOP);
 
         if (hwgc->sub_state == 1)
+            // @change
             TRY_R(2, from_obj, &common_m_value, 8, "read common oop markvalue", STEP_COMMON_OOP);
 
         if (hwgc->sub_state == 2)
@@ -478,6 +508,7 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 3)
+            // @change
             TRY_W(4, task, &to_obj, 8, "write task obj", STEP_COMMON_OOP);
 
         if (hwgc->sub_state == 4)
@@ -524,13 +555,15 @@ static void do_hwgc_work(void *opaque)
     static uintptr_t dest_attr_ptr, monitor_markWord, from_region;
     static uintptr_t buffer_temp, buffer, region_top, region_end;
     static uint young_index;
-    static uintptr_t originValue, new_mark, writeSrcMW;
+    static uintptr_t new_mark, writeSrcMW;
     if (hwgc->state == STEP_Copy2Survivor)
     {
         if (hwgc->sub_state == 0)
+            // @change
             TRY_R(1, from_obj + 8, &klass_ptr, 8, "read klasss ptr", STEP_Copy2Survivor);
 
         if (hwgc->sub_state == 1)
+            // @change
             TRY_R(2, klass_ptr + 8, &originValue, 8, "read lh kid", STEP_Copy2Survivor);
 
         if (hwgc->sub_state == 2)
@@ -543,6 +576,7 @@ static void do_hwgc_work(void *opaque)
                 hwgc->sub_state = 3;
             }
             else
+                // @change
                 TRY_R(3, from_obj + 16, &common_oop_array_length, 4, "read common oop array length", STEP_Copy2Survivor);
         }
 
@@ -800,6 +834,7 @@ static void do_hwgc_work(void *opaque)
         {
             if (region_top < region_end)
             {
+                // @change
                 size_t words = (region_end - region_top) / 8;
                 if (words >= 3)
                 {
@@ -824,6 +859,7 @@ static void do_hwgc_work(void *opaque)
             TRY_W(8, region_top, &originValue, 8, "write region top", STEP_ALLOCATE_DIRECT);
         }
 
+        // @change
         if (hwgc->sub_state == 8)
             TRY_W(9, region_top + 0x8, &alloc_klass_ptr, 8, "write region top + 0x8", STEP_ALLOCATE_DIRECT);
 
@@ -969,59 +1005,28 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 3)
         {
             if (to_obj == 0)
-                TRY_R(9, allocator_ptr + 0x10, &originValue, 1, "read is full value", STEP_ALLOCATE_DURING_GC);
+                TRY_R(5, allocator_ptr + 0x10, &originValue, 1, "read is full value", STEP_ALLOCATE_DURING_GC);
             else
                 hwgc->sub_state = 4;
         }
 
         if (hwgc->sub_state == 4)
         {
-            if (to_obj != 0 && dest_attr_type == 0)
-                TRY_R(5, hwgc->pars.g1h + 0x78, &card_table_ptr, 8, "read card table ptr", STEP_ALLOCATE_DURING_GC);
-            else
-                hwgc->sub_state = 8;
-        }
-
-        if (hwgc->sub_state == 5)
-            TRY_R(6, card_table_ptr + 0x40, &byte_map_base, 8, "read byte map base", STEP_ALLOCATE_DURING_GC);
-
-        if (hwgc->sub_state == 6)
-        {
-            first = byte_map_base + (to_obj >> 9);
-            last = byte_map_base + ((to_obj + actual_plab_size * 8 - 8) >> 9);
-            hwgc->sub_state = 7;
-        }
-
-        if (hwgc->sub_state == 7)
-        {
-            if (first < last)
-            {
-                uintptr_t temp = first;
-                originValue = 4;
-                ++first;
-                TRY_W(7, temp, &originValue, 1, "write first", STEP_ALLOCATE_DURING_GC);
-            }
-            else
-                hwgc->sub_state = 8;
-        }
-
-        if (hwgc->sub_state == 8)
-        {
             hwgc->sub_state = during_gc_select ? 24 : 17;
             hwgc->state = STEP_ALLOCATE_DIRECT;
             return;
         }
 
-        if (hwgc->sub_state == 9)
+        if (hwgc->sub_state == 5)
         {
             bool is_full = dest_attr_type == 0 ? originValue & 0x1 : originValue & 0x2;
             if (!is_full)
-                TRY_W(10, hwgc->pars.lockPtr, &hwgc->pars.thread, 8, "write lock ptr", STEP_ALLOCATE_DURING_GC);
+                TRY_W(6, hwgc->pars.lockPtr, &hwgc->pars.thread, 8, "write lock ptr", STEP_ALLOCATE_DURING_GC);
             else
                 hwgc->sub_state = 4;
         }
 
-        if (hwgc->sub_state == 10)
+        if (hwgc->sub_state == 6)
         {
             if (dest_attr_type == 0)
             {
@@ -1038,7 +1043,7 @@ static void do_hwgc_work(void *opaque)
             }
         }
 
-        if (hwgc->sub_state == 11)
+        if (hwgc->sub_state == 7)
         {
             if (to_obj == 0)
             {
@@ -1046,22 +1051,22 @@ static void do_hwgc_work(void *opaque)
                 hwgc->sub_state = 0;
             }
             else
-                hwgc->sub_state = 13;
+                hwgc->sub_state = 8;
         }
 
-        if (hwgc->sub_state == 12)
+        if (hwgc->sub_state == 8)
         {
             if (to_obj == 0)
             {
                 uintptr_t addr = dest_attr_type == 0 ? allocator_ptr + 0x10 : allocator_ptr + 0x11;
                 originValue = 1;
-                TRY_W(13, addr, &originValue, 1, "write allocator_ptr + 0x10/11", STEP_ALLOCATE_DURING_GC);
+                TRY_W(9, addr, &originValue, 1, "write allocator_ptr + 0x10/11", STEP_ALLOCATE_DURING_GC);
             }
             else
-                hwgc->sub_state = 13;
+                hwgc->sub_state = 9;
         }
 
-        if (hwgc->sub_state == 13)
+        if (hwgc->sub_state == 9)
         {
             originValue = 0;
             TRY_W(4, hwgc->pars.lockPtr, &originValue, 8, "write lock ptr", STEP_ALLOCATE_DURING_GC);
@@ -1098,7 +1103,7 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 3)
         {
-            hwgc->sub_state = par_alloc_iml_sel == 2 ? 1 : (par_alloc_iml_sel == 1 ? 11 : 3);
+            hwgc->sub_state = par_alloc_iml_sel == 2 ? 1 : (par_alloc_iml_sel == 1 ? 7 : 3);
             hwgc->state = par_alloc_iml_sel == 2 ? STEP_PAR_ALLOCATE : STEP_ALLOCATE_DURING_GC;
         }
     }
@@ -1221,14 +1226,14 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 13)
         {
-            hwgc->sub_state = par_alloc_sel == 2 ? 17 : (par_alloc_sel == 1 ? 11 : 3);
+            hwgc->sub_state = par_alloc_sel == 2 ? 17 : (par_alloc_sel == 1 ? 7 : 3);
             hwgc->state = par_alloc_sel == 2 ? STEP_ATTEMPT_ALLOC : STEP_ALLOCATE_DURING_GC;
         }
     }
 
     static size_t allocated_bytes;
     static int8_t type;
-    static uintptr_t new_alloc_region;
+    static uintptr_t new_alloc_region, cm, root_regions_array, mem_region, next_top;
     if (hwgc->state == STEP_ATTEMPT_ALLOC)
     {
         if (hwgc->sub_state == 0)
@@ -1236,7 +1241,7 @@ static void do_hwgc_work(void *opaque)
             if (alloc_region != hwgc->pars.dummyRegion)
                 TRY_R(1, alloc_region, &alloc_end, 8, "read alloc region", STEP_ATTEMPT_ALLOC);
             else
-                hwgc->sub_state = 2;
+                hwgc->sub_state = 10;
         }
 
         if (hwgc->sub_state == 1)
@@ -1262,15 +1267,53 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 6)
         {
-            uintptr_t ptr = type == 1 ? hwgc->pars.g1h + 0xa0 : hwgc->pars.g1h + 0x3f8;
+            uintptr_t ptr = hwgc->pars.g1h + (type == 1 ? 0xa0 : 0x3f8) + 0x10;
             TRY_R(7, ptr, &originValue, 8, "read oldset or survivor", STEP_ATTEMPT_ALLOC);
         }
 
         if (hwgc->sub_state == 7)
         {
-            uintptr_t ptr = hwgc->pars.g1h + (type == 1 ? 0xa0 : 0x3f8);
+            uintptr_t ptr = hwgc->pars.g1h + (type == 1 ? 0xa0 : 0x3f8) + 0x10;
             originValue = originValue + (type == 1 ? 1 : allocated_bytes);
-            TRY_W(8, ptr, &originValue, 8, "write oldset or survivor", STEP_ATTEMPT_ALLOC);
+            TRY_W(21, ptr, &originValue, 8, "write oldset or survivor", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 21)
+            TRY_R(22, hwgc->pars.g1h + 0x3c1, &originValue, 1, "read during_im", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 22)
+        {
+            if ((originValue & 0xff) && allocated_bytes > 0)
+                TRY_R(23, hwgc->pars.g1h + 0x4e8, &cm, 8, "read cm", STEP_ATTEMPT_ALLOC);
+            else
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 23)
+            TRY_R(24, alloc_region + 0xe8, &next_top, 8, "read next top", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 24)
+            TRY_R(25, cm + 0xb0, &root_regions_array, 8, "read root regions array", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 25)
+            TRY_R(26, cm + 0xb0 + 0x10, &originValue, 8, "read idx", STEP_ATTEMPT_ALLOC);
+
+        if (hwgc->sub_state == 26)
+        {
+            mem_region = root_regions_array + originValue * 0x10;
+            TRY_W(27, mem_region, &next_top, 8, "write mem region next top", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 27)
+        {
+            originValue = originValue + 1;
+            TRY_W(28, cm + 0xb0 + 0x10, &originValue, 8, "write idx", STEP_ATTEMPT_ALLOC);
+        }
+
+        if (hwgc->sub_state == 28)
+        {
+            originValue = (alloc_top - next_top) / 8;
+            TRY_W(8, mem_region + 0x8, &originValue, 8, "write mem_region + 0x8", STEP_ATTEMPT_ALLOC);
         }
 
         if (hwgc->sub_state == 8)
@@ -1361,7 +1404,7 @@ static void do_hwgc_work(void *opaque)
             else
                 to_obj = 0;
             hwgc->state = STEP_ALLOCATE_DURING_GC;
-            hwgc->sub_state = 12;
+            hwgc->sub_state = 8;
             return;
         }
     }
@@ -1406,10 +1449,10 @@ static void do_hwgc_work(void *opaque)
             // return;
         }
 
-        if (hwgc->sub_state == 22)
-            TRY_R(23, hwgc->pars.g1h + 0x370, &expand_failure, 1, "read expand faiulre", STEP_NEW_GC_ALLOC);
+        if (hwgc->sub_state == 16)
+            TRY_R(17, hwgc->pars.g1h + 0x370, &expand_failure, 1, "read expand faiulre", STEP_NEW_GC_ALLOC);
 
-        if (hwgc->sub_state == 23)
+        if (hwgc->sub_state == 17)
         {
             if (new_alloc_region == 0 && (expand_failure & 0xff))
             {
@@ -1420,7 +1463,7 @@ static void do_hwgc_work(void *opaque)
                 hwgc->softPars.par0 = region_node_index;
 
                 hwgc->wake_state = STEP_NEW_GC_ALLOC;
-                hwgc->wake_sub_state = 24;
+                hwgc->wake_sub_state = 18;
                 if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
                 {
                     bql_lock();
@@ -1433,7 +1476,7 @@ static void do_hwgc_work(void *opaque)
                 hwgc->sub_state = 4;
         }
 
-        if (hwgc->sub_state == 24)
+        if (hwgc->sub_state == 18)
         {
             tag = hwgc->softPars.res & 0xff;
             originValue = 0;
@@ -1461,7 +1504,7 @@ static void do_hwgc_work(void *opaque)
             if (heap_region_type == 0x3)
                 TRY_R(6, grow_array_ptr, &originValue, 8, "read grow array len and max", STEP_NEW_GC_ALLOC);
             else
-                hwgc->sub_state = 16;
+                hwgc->sub_state = 10;
         }
 
         if (hwgc->sub_state == 6)
@@ -1504,58 +1547,32 @@ static void do_hwgc_work(void *opaque)
             TRY_W(10, data_ptr + array_len * 8, &new_alloc_region, 8, "write data ptr", STEP_NEW_GC_ALLOC);
 
         if (hwgc->sub_state == 10)
-            TRY_R(11, hwgc->pars.g1h + 0x3f8 + 0x18, &count_per_node, 8, "read count per node ptr", STEP_NEW_GC_ALLOC);
+            TRY_R(11, new_alloc_region + 0xb0, &count_per_node, 8, "read remset ptr", STEP_NEW_GC_ALLOC);
 
         if (hwgc->sub_state == 11)
-            TRY_R(12, hwgc->pars.g1h + 0x3f8 + 0x20, &numa, 8, "read numa", STEP_NEW_GC_ALLOC);
+            TRY_R(12, new_alloc_region + 0xb8, &originValue, 8, "read hrm index and type", STEP_NEW_GC_ALLOC);
 
         if (hwgc->sub_state == 12)
-            TRY_R(13, numa + 0x18, &originValue, 4, "read active node ids", STEP_NEW_GC_ALLOC);
-
-        if (hwgc->sub_state == 13)
-            TRY_R(14, new_alloc_region + 0x120, &array_len, 4, "read new node index", STEP_NEW_GC_ALLOC);
-
-        if (hwgc->sub_state == 14)
-        {
-            if (array_len < originValue)
-                TRY_R(15, count_per_node + array_len * 4, &originValue, 4, "read count per node + new node index * 4", STEP_NEW_GC_ALLOC);
-            else
-                hwgc->sub_state = 16;
-        }
-
-        if (hwgc->sub_state == 15)
-        {
-            originValue = originValue + 1;
-            TRY_W(16, count_per_node + array_len * 4, &originValue, 4, "write count per node + new node index * 4", STEP_NEW_GC_ALLOC);
-        }
-
-        if (hwgc->sub_state == 16)
-            TRY_R(17, new_alloc_region + 0xb0, &count_per_node, 8, "read remset ptr", STEP_NEW_GC_ALLOC);
-
-        if (hwgc->sub_state == 17)
-            TRY_R(18, new_alloc_region + 0xb8, &originValue, 8, "read hrm index and type", STEP_NEW_GC_ALLOC);
-
-        if (hwgc->sub_state == 18)
         {
             array_len = originValue >> 32;
             array_max = (uint)originValue;
             originValue = (array_len & 0x2) != 0 ? 2 : ((array_len & 0x10) != 0 ? 0 : 1);
             if (originValue != 1)
-                TRY_W(19, count_per_node + 0xf0, &originValue, 4, "write state ptr", STEP_NEW_GC_ALLOC);
+                TRY_W(13, count_per_node + 0xf0, &originValue, 4, "write state ptr", STEP_NEW_GC_ALLOC);
             else
-                hwgc->sub_state = 19;
+                hwgc->sub_state = 13;
         }
 
-        if (hwgc->sub_state == 19)
-            TRY_R(20, hwgc->pars.g1h + 0x580 + 0x10, &count_per_node, 8, "read region attr base", STEP_NEW_GC_ALLOC);
+        if (hwgc->sub_state == 13)
+            TRY_R(14, hwgc->pars.g1h + 0x580 + 0x10, &count_per_node, 8, "read region attr base", STEP_NEW_GC_ALLOC);
 
-        if (hwgc->sub_state == 20)
+        if (hwgc->sub_state == 14)
         {
             bool needs_remset_update = (array_len & 0x10) == 0;
-            TRY_W(21, count_per_node + array_max * 2, &needs_remset_update, 1, "write region attr base + hrm index * 2", STEP_NEW_GC_ALLOC);
+            TRY_W(15, count_per_node + array_max * 2, &needs_remset_update, 1, "write region attr base + hrm index * 2", STEP_NEW_GC_ALLOC);
         }
 
-        if (hwgc->sub_state == 21)
+        if (hwgc->sub_state == 15)
         {
             hwgc->sub_state = 11;
             hwgc->state = STEP_ATTEMPT_ALLOC;
@@ -1729,7 +1746,7 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 21)
         {
-            hwgc->sub_state = allocate_free_sel ? 4 : 22;
+            hwgc->sub_state = allocate_free_sel ? 4 : 16;
             hwgc->state = STEP_NEW_GC_ALLOC;
             return;
         }
@@ -2219,7 +2236,7 @@ static void do_hwgc_work(void *opaque)
                 originValue = 0;
                 tag = safeAccessHWAddr(hwgc, node + 0x8, &originValue, 8, "write node + 0x8", true, STEP_AOP, 15);
                 if (tag)
-                    hwgc->sub_state = 15;
+                    hwgc->sub_state = 17;
             }
             else
             {
@@ -2357,10 +2374,16 @@ static void *hwgc_work_thread(void *opaque)
         qemu_mutex_unlock(&hwgc->thr_mutex);
 
         printf("do hwgc work\n");
+        page_fault_time = 0;
         page_fault = 0;
         enqueued_irq = 0;
         alloc_irq = 0;
         grow_irq = 0;
+
+        hwgc->pars.useCompressedOops = 0;
+        hwgc->pars.useCompressedKlassPointers = 0;
+
+        work_begin = get_time_ns();
 
         while (1)
         {
@@ -2375,6 +2398,8 @@ static void *hwgc_work_thread(void *opaque)
 
                 if (hwgc->state == STEP_PAGE_FAULT)
                 {
+                    end_time = get_time_ns();
+                    page_fault_time += end_time - start_time;
 #ifdef DEBUG_ENABLE
                     if ((hwgc->softPars.par2 & 0xff) == 0x0)
                         printf("read data %lx\n", hwgc->softPars.res);
@@ -2399,7 +2424,9 @@ static void *hwgc_work_thread(void *opaque)
             bql_unlock();
         }
 
-        printf("do hwgc end, page fault %d, enqueued %d, alloc %d, grow %d\n", page_fault, enqueued_irq, alloc_irq, grow_irq);
+        work_end = get_time_ns();
+
+        printf("do hwgc end(time %.3f), page fault %d(time %.3f), enqueued %d, alloc %d, grow %d\n", (work_end - work_begin) / 1000000.0, page_fault, page_fault_time / 1000000.0, enqueued_irq, alloc_irq, grow_irq);
     }
     return NULL;
 }

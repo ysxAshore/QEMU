@@ -95,6 +95,12 @@ struct HWGCParameter
     uint64_t thread;
     uint64_t dummyRegion;
     uint64_t numaPtr;
+    uint64_t compressedOopBase;
+    uint64_t compressedKlassPointerBase;
+    uint8_t compressedOopShift;
+    uint8_t compressedKlassPointerShift;
+    uint8_t useCompressedOops;
+    uint8_t useCompressedKlassPointers;
 };
 
 struct HWGCSoftRelated
