@@ -229,7 +229,7 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
     }
 
     qemu_mutex_lock(&hwgc->thr_mutex);
-    if (addr >= REG_PAR0 && addr <= REG_PAR21)
+    if (addr >= REG_PAR0 && addr <= REG_PAR22)
     {
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_COMPUTING || size != 8)
             return;
@@ -255,6 +255,8 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
             offsetof(struct HWGCParameter, thread),                           // REG_PAR18
             offsetof(struct HWGCParameter, dummyRegion),                      // REG_PAR19
             offsetof(struct HWGCParameter, numaPtr),                          // REG_PAR20
+            offsetof(struct HWGCParameter, compressedOopBase),                // REG_PAR21
+            offsetof(struct HWGCParameter, compressedKlassPointerBase),       // REG_PAR22
 
         };
         int idx = (addr - REG_PAR0) / 8;
@@ -268,6 +270,15 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
         }
         else
             *(uint64_t *)(base + par_offsets[idx]) = val;
+    }
+
+    if (addr == REG_PAR23)
+    {
+        printf("val %lx \n", val);
+        hwgc->pars.compressedOopShift = (uint8_t)(val >> 24);
+        hwgc->pars.compressedKlassPointerShift = (uint8_t)(val >> 16);
+        hwgc->pars.useCompressedOops = (uint8_t)(val >> 8);
+        hwgc->pars.useCompressedKlassPointers = (uint8_t)(val);
     }
 
     if (addr == REG_START_WORK)
@@ -397,18 +408,18 @@ static void do_hwgc_work(void *opaque)
         {
             to_obj = partial_m_value & ~0x3;
             // @change
-            TRY_R(2, from_obj + 16, &partial_from_length, 4, "read partial from obj length", STEP_PARTIAL_ARRAY);
+            TRY_R(2, from_obj + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &partial_from_length, 4, "read partial from obj length", STEP_PARTIAL_ARRAY);
         }
 
         if (hwgc->sub_state == 2)
             // @change
-            TRY_R(3, to_obj + 16, &start, 4, "read partial to obj length", STEP_PARTIAL_ARRAY);
+            TRY_R(3, to_obj + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &start, 4, "read partial to obj length", STEP_PARTIAL_ARRAY);
 
         if (hwgc->sub_state == 3)
         {
             int temp = start + hwgc->pars.chunkSize;
             // @change
-            TRY_W(4, to_obj + 16, &temp, 4, "write partial to obj length", STEP_PARTIAL_ARRAY);
+            TRY_W(4, to_obj + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &temp, 4, "write partial to obj length", STEP_PARTIAL_ARRAY);
         }
 
         if (hwgc->sub_state == 4)
@@ -459,10 +470,10 @@ static void do_hwgc_work(void *opaque)
         {
             // @change
             scanning_in_young = (heap_region_type & 0x2) != 0;
-            uintptr_t low = to_obj + 24 + start * 8;
-            uintptr_t high = to_obj + 24 + (start + hwgc->pars.chunkSize) * 8;
-            p = to_obj + 24;
-            q = p + (start + hwgc->pars.chunkSize) * 8;
+            uintptr_t low = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24) + start * (hwgc->pars.useCompressedOops ? 4 : 8);
+            uintptr_t high = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24) + (start + hwgc->pars.chunkSize) * (hwgc->pars.useCompressedOops ? 4 : 8);
+            p = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24);
+            q = p + (start + hwgc->pars.chunkSize) * (hwgc->pars.useCompressedOops ? 4 : 8);
             if (p < low)
                 p = low;
             if (q > high)
@@ -480,17 +491,28 @@ static void do_hwgc_work(void *opaque)
     }
 
     static uintptr_t common_m_value;
-    static uintptr_t copy2survivor_region_attr_ptr, originValue;
+    static uintptr_t copy2survivor_region_attr_ptr, originValue, offset;
     static uint16_t region_attr;
     if (hwgc->state == STEP_COMMON_OOP)
     {
         if (hwgc->sub_state == 0)
-            // @change
-            TRY_R(1, task, &from_obj, 8, "read common oop task", STEP_COMMON_OOP);
+            TRY_R(1, task, &offset, 8, "read common oop task", STEP_COMMON_OOP);
 
         if (hwgc->sub_state == 1)
-            // @change
+        {
+            if (hwgc->pars.useCompressedOops == 1)
+            {
+                offset = (uint)offset;
+                if (offset == 0)
+                    from_obj = 0;
+                else
+                    from_obj = (uintptr_t)hwgc->pars.compressedOopBase + (offset << hwgc->pars.compressedOopShift);
+            }
+            else
+                from_obj = offset;
+
             TRY_R(2, from_obj, &common_m_value, 8, "read common oop markvalue", STEP_COMMON_OOP);
+        }
 
         if (hwgc->sub_state == 2)
         {
@@ -508,8 +530,13 @@ static void do_hwgc_work(void *opaque)
         }
 
         if (hwgc->sub_state == 3)
-            // @change
-            TRY_W(4, task, &to_obj, 8, "write task obj", STEP_COMMON_OOP);
+        {
+            uintptr_t writeObj = to_obj;
+            if (hwgc->pars.useCompressedOops == 1)
+                writeObj = (to_obj - hwgc->pars.compressedOopBase) >> hwgc->pars.compressedOopShift;
+
+            TRY_W(4, task, &writeObj, (hwgc->pars.useCompressedOops ? 4 : 8), "write task obj", STEP_COMMON_OOP);
+        }
 
         if (hwgc->sub_state == 4)
         {
@@ -559,12 +586,15 @@ static void do_hwgc_work(void *opaque)
     if (hwgc->state == STEP_Copy2Survivor)
     {
         if (hwgc->sub_state == 0)
-            // @change
             TRY_R(1, from_obj + 8, &klass_ptr, 8, "read klasss ptr", STEP_Copy2Survivor);
 
         if (hwgc->sub_state == 1)
-            // @change
+        {
+            if (hwgc->pars.useCompressedKlassPointers == 1)
+                klass_ptr = hwgc->pars.compressedKlassPointerBase + ((uintptr_t)((uint)klass_ptr) << hwgc->pars.compressedKlassPointerShift);
+
             TRY_R(2, klass_ptr + 8, &originValue, 8, "read lh kid", STEP_Copy2Survivor);
+        }
 
         if (hwgc->sub_state == 2)
         {
@@ -577,7 +607,7 @@ static void do_hwgc_work(void *opaque)
             }
             else
                 // @change
-                TRY_R(3, from_obj + 16, &common_oop_array_length, 4, "read common oop array length", STEP_Copy2Survivor);
+                TRY_R(3, from_obj + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &common_oop_array_length, 4, "read common oop array length", STEP_Copy2Survivor);
         }
 
         if (hwgc->sub_state == 3)
@@ -836,12 +866,12 @@ static void do_hwgc_work(void *opaque)
             {
                 // @change
                 size_t words = (region_end - region_top) / 8;
-                if (words >= 3)
+                if (words >= (hwgc->pars.useCompressedKlassPointers ? 2 : 3))
                 {
-                    size_t payload_size = words - 3;
+                    size_t payload_size = words - (hwgc->pars.useCompressedKlassPointers ? 2 : 3);
                     size_t len = payload_size * 8 / 4;
                     alloc_klass_ptr = hwgc->pars.intArrayKlassObj;
-                    TRY_W(7, region_top + 16, &len, 4, "write arraylen", STEP_ALLOCATE_DIRECT);
+                    TRY_W(7, region_top + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &len, 4, "write arraylen", STEP_ALLOCATE_DIRECT);
                 }
                 else if (words > 0)
                 {
@@ -861,7 +891,11 @@ static void do_hwgc_work(void *opaque)
 
         // @change
         if (hwgc->sub_state == 8)
-            TRY_W(9, region_top + 0x8, &alloc_klass_ptr, 8, "write region top + 0x8", STEP_ALLOCATE_DIRECT);
+        {
+            if (hwgc->pars.useCompressedKlassPointers)
+                alloc_klass_ptr = (alloc_klass_ptr - hwgc->pars.compressedKlassPointerBase) >> hwgc->pars.compressedKlassPointerShift;
+            TRY_W(9, region_top + 0x8, &alloc_klass_ptr, (hwgc->pars.useCompressedKlassPointers ? 4 : 8), "write region top + 0x8", STEP_ALLOCATE_DIRECT);
+        }
 
         if (hwgc->sub_state == 9)
             TRY_W(10, buffer + 0x38, &region_end, 8, "write buffer + 0x38", STEP_ALLOCATE_DIRECT);
@@ -1496,7 +1530,7 @@ static void do_hwgc_work(void *opaque)
             if (new_alloc_region != 0)
                 TRY_W(5, new_alloc_region + 0xbc, &heap_region_type, 4, "write heap reion type", STEP_NEW_GC_ALLOC);
             else
-                hwgc->sub_state = 21;
+                hwgc->sub_state = 15;
         }
 
         if (hwgc->sub_state == 5)
@@ -1786,7 +1820,7 @@ static void do_hwgc_work(void *opaque)
             if (lh < 0)
             {
                 end = common_oop_array_length % hwgc->pars.chunkSize;
-                TRY_W(1, to_obj + 16, &end, 4, "write dest array length", STEP_TRACE);
+                TRY_W(1, to_obj + (hwgc->pars.useCompressedKlassPointers ? 12 : 16), &end, 4, "write dest array length", STEP_TRACE);
             }
             else
                 TRY_R(5, klass_ptr + 160, &vtable_len, 4, "read vtable len", STEP_TRACE);
@@ -1816,10 +1850,10 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 4)
         {
-            uintptr_t low = to_obj + 24;
-            uintptr_t high = to_obj + 24 + end * 8;
-            p = to_obj + 24;
-            q = p + common_oop_array_length * 8;
+            uintptr_t low = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24);
+            uintptr_t high = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24) + end * (hwgc->pars.useCompressedOops ? 4 : 8);
+            p = to_obj + (hwgc->pars.useCompressedKlassPointers ? 16 : 24);
+            q = p + common_oop_array_length * (hwgc->pars.useCompressedOops ? 4 : 8);
             if (p < low)
                 p = low;
             if (q > high)
@@ -1869,7 +1903,7 @@ static void do_hwgc_work(void *opaque)
             int offset = (int)originValue;
             int count = originValue >> 32;
             p = to_obj + offset;
-            q = p + count * 8;
+            q = p + count * (hwgc->pars.useCompressedOops ? 4 : 8);
 
             hwgc->state = STEP_TRACE_DEC;
             hwgc->sub_state = 0;
@@ -1904,7 +1938,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 10)
         {
             p = to_obj + 184;
-            q = p + staticCount * 8;
+            q = p + staticCount * (hwgc->pars.useCompressedOops ? 4 : 8);
 
             hwgc->state = STEP_TRACE_PLUS;
             hwgc->sub_state = 0;
@@ -1920,8 +1954,26 @@ static void do_hwgc_work(void *opaque)
         {
             if (i != 3)
             {
-                src = i == 1 ? from_obj + 16 : to_obj + 40;
-                dest = i == 1 ? to_obj + 16 : from_obj + 40;
+                uint discovered_offset;
+                uint referent_offset;
+                if (hwgc->pars.useCompressedKlassPointers & hwgc->pars.useCompressedOops)
+                {
+                    discovered_offset = 0x18;
+                    referent_offset = 0xc;
+                }
+                else if (hwgc->pars.useCompressedOops)
+                {
+                    discovered_offset = 0x1c;
+                    referent_offset = 0x10;
+                }
+                else
+                {
+                    discovered_offset = 0x28;
+                    referent_offset = 0x10;
+                }
+
+                src = i == 1 ? from_obj + referent_offset : from_obj + discovered_offset;
+                dest = i == 1 ? to_obj + referent_offset : to_obj + discovered_offset;
 
                 ++i;
 
@@ -1946,7 +1998,7 @@ static void do_hwgc_work(void *opaque)
         {
             src = p - to_obj + from_obj;
             dest = p;
-            p += 8;
+            p += (hwgc->pars.useCompressedOops ? 4 : 8);
             hwgc->state = STEP_DO_OOP_WORK;
         }
         else
@@ -1960,7 +2012,7 @@ static void do_hwgc_work(void *opaque)
     {
         if (p < q)
         {
-            q -= 8;
+            q -= (hwgc->pars.useCompressedOops ? 4 : 8);
             src = q - to_obj + from_obj;
             dest = q;
             hwgc->state = STEP_DO_OOP_WORK;
@@ -1978,18 +2030,19 @@ static void do_hwgc_work(void *opaque)
     if (hwgc->state == STEP_DO_OOP_WORK)
     {
         if (hwgc->sub_state == 0)
-        {
-            tag = safeAccessHWAddr(hwgc, src, &heap_oop, 8, "read heap oop", false, STEP_DO_OOP_WORK, 1);
-            if (tag)
-                hwgc->sub_state = 1;
-        }
+            TRY_R(1, src, &heap_oop, 8, "read heap oop", STEP_DO_OOP_WORK);
 
         if (hwgc->sub_state == 1)
         {
+            if (hwgc->pars.useCompressedOops)
+                heap_oop = (uint)heap_oop;
+
             if (heap_oop == 0)
                 hwgc->sub_state = 9;
             else
             {
+                if (hwgc->pars.useCompressedOops)
+                    heap_oop = hwgc->pars.compressedOopBase + (heap_oop << hwgc->pars.compressedOopShift);
                 uintptr_t region_attr_ptr = hwgc->pars.regionAttrBiasedBase + (heap_oop >> hwgc->pars.regionAttrShiftBy) * 2;
                 tag = safeAccessHWAddr(hwgc, region_attr_ptr, &region_attr, 2, "read region attr", false, STEP_DO_OOP_WORK, 2);
                 if (tag)
@@ -2063,7 +2116,8 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 7)
         {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueElemsBase + array_localBot * 8, &dest, 8, "write taskqueue elems", true, STEP_DO_OOP_WORK, 8);
+            uintptr_t writeElems = dest + (hwgc->pars.useCompressedOops ? 1 : 0);
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueElemsBase + array_localBot * 8, &writeElems, 8, "write taskqueue elems", true, STEP_DO_OOP_WORK, 8);
             if (tag)
                 hwgc->sub_state = 8;
         }
@@ -2236,7 +2290,7 @@ static void do_hwgc_work(void *opaque)
                 originValue = 0;
                 tag = safeAccessHWAddr(hwgc, node + 0x8, &originValue, 8, "write node + 0x8", true, STEP_AOP, 15);
                 if (tag)
-                    hwgc->sub_state = 17;
+                    hwgc->sub_state = 15;
             }
             else
             {
@@ -2245,7 +2299,7 @@ static void do_hwgc_work(void *opaque)
                 hwgc->state = STEP_DEBUG;
                 hwgc->sub_state = 0;
                 hwgc->wake_state = STEP_AOP;
-                hwgc->wake_sub_state = 17;
+                hwgc->wake_sub_state = 15;
                 if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
                 {
                     bql_lock();
@@ -2261,93 +2315,78 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 15)
         {
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x100, &originValue, 8, "read node allocator ptr + 0x100", false, STEP_AOP, 16);
+            if (hwgc->wake_state == STEP_AOP && hwgc->wake_sub_state == 15 && hwgc->softPars.par0 == node_allocator_ptr)
+                node = hwgc->softPars.res;
+            buffer = node + 0x10;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "write buffer", true, STEP_AOP, 16);
             if (tag)
                 hwgc->sub_state = 16;
         }
 
         if (hwgc->sub_state == 16)
         {
-            originValue = originValue - 1;
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x100, &originValue, 8, "write node allocator ptr + 0x100", true, STEP_AOP, 17);
+            tag = safeAccessHWAddr(hwgc, node_allocator_ptr, &index, 8, "read new index", false, STEP_AOP, 17);
             if (tag)
                 hwgc->sub_state = 17;
         }
 
         if (hwgc->sub_state == 17)
         {
-            if (hwgc->wake_state == STEP_AOP && hwgc->wake_sub_state == 17 && hwgc->softPars.par0 == node_allocator_ptr)
-                node = hwgc->softPars.res;
-            buffer = node + 0x10;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "write buffer", true, STEP_AOP, 18);
+            originValue = index * 8;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &originValue, 8, "write index", true, STEP_AOP, 18);
             if (tag)
                 hwgc->sub_state = 18;
         }
 
         if (hwgc->sub_state == 18)
         {
-            tag = safeAccessHWAddr(hwgc, node_allocator_ptr, &index, 8, "read new index", false, STEP_AOP, 19);
-            if (tag)
-                hwgc->sub_state = 19;
+            if (old_node == 0)
+                hwgc->sub_state = 6;
+            else
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "read buffer list ptr + 0x10", false, STEP_AOP, 19);
+                if (tag)
+                    hwgc->sub_state = 19;
+            }
         }
 
         if (hwgc->sub_state == 19)
         {
-            originValue = index * 8;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &originValue, 8, "write index", true, STEP_AOP, 20);
+            originValue = originValue + index;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "write buffer list ptr + 0x10", true, STEP_AOP, 20);
             if (tag)
                 hwgc->sub_state = 20;
         }
 
         if (hwgc->sub_state == 20)
         {
-            if (old_node == 0)
-                hwgc->sub_state = 6;
-            else
-            {
-                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "read buffer list ptr + 0x10", false, STEP_AOP, 21);
-                if (tag)
-                    hwgc->sub_state = 21;
-            }
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &originValue, 8, "read buffer list ptr", false, STEP_AOP, 21);
+            if (tag)
+                hwgc->sub_state = 21;
         }
 
         if (hwgc->sub_state == 21)
         {
-            originValue = originValue + index;
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "write buffer list ptr + 0x10", true, STEP_AOP, 22);
+            tag = safeAccessHWAddr(hwgc, old_node + 0x8, &originValue, 8, "write old node + 0x8", true, STEP_AOP, 22);
             if (tag)
                 hwgc->sub_state = 22;
         }
 
         if (hwgc->sub_state == 22)
         {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &originValue, 8, "read buffer list ptr", false, STEP_AOP, 23);
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &old_node, 8, "write buffer list ptr", true, STEP_AOP, 23);
             if (tag)
                 hwgc->sub_state = 23;
         }
 
         if (hwgc->sub_state == 23)
         {
-            tag = safeAccessHWAddr(hwgc, old_node + 0x8, &originValue, 8, "write old node + 0x8", true, STEP_AOP, 24);
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &originValue, 8, "read buffer list ptr + 0x8", false, STEP_AOP, 24);
             if (tag)
                 hwgc->sub_state = 24;
         }
 
         if (hwgc->sub_state == 24)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &old_node, 8, "write buffer list ptr", true, STEP_AOP, 25);
-            if (tag)
-                hwgc->sub_state = 25;
-        }
-
-        if (hwgc->sub_state == 25)
-        {
-            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &originValue, 8, "read buffer list ptr + 0x8", false, STEP_AOP, 26);
-            if (tag)
-                hwgc->sub_state = 26;
-        }
-
-        if (hwgc->sub_state == 26)
         {
             if (originValue == 0)
             {
@@ -2379,9 +2418,6 @@ static void *hwgc_work_thread(void *opaque)
         enqueued_irq = 0;
         alloc_irq = 0;
         grow_irq = 0;
-
-        hwgc->pars.useCompressedOops = 0;
-        hwgc->pars.useCompressedKlassPointers = 0;
 
         work_begin = get_time_ns();
 

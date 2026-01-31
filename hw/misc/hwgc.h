@@ -12,7 +12,7 @@
 #include "exec/target_page.h"
 #include "system/address-spaces.h"
 
-// #define DEBUG_ENABLE 1
+#define DEBUG_ENABLE 1
 
 // MMIO REG
 #define REG_DEVICE_ID 0x0
@@ -41,13 +41,15 @@
 #define REG_PAR19 0xa8
 #define REG_PAR20 0xb0
 #define REG_PAR21 0xb8
-#define REG_START_WORK 0xc0
-#define REG_CONTINUE_WORK 0xc4
-#define REG_SOFT_RES 0xc8
-#define REG_SOFT_PAR0 0xd0
-#define REG_SOFT_PAR1 0xd8
-#define REG_SOFT_PAR2 0xe0
-#define REG_SOFT_PAR3 0xe8
+#define REG_PAR22 0xc0
+#define REG_PAR23 0xc8
+#define REG_START_WORK 0xd0
+#define REG_CONTINUE_WORK 0xd4
+#define REG_SOFT_RES 0xd8
+#define REG_SOFT_PAR0 0xe0
+#define REG_SOFT_PAR1 0xe8
+#define REG_SOFT_PAR2 0xf0
+#define REG_SOFT_PAR3 0xf8
 
 #define ALLOC_SLOW_IRQ 0x00000001
 #define ENQUEUE_FAILED_IRQ 0x00000010
