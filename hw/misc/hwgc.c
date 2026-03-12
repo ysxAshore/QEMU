@@ -1158,7 +1158,7 @@ static void do_hwgc_work(void *opaque)
 
         if (hwgc->sub_state == 1)
         {
-            if (to_obj != 0)
+            if (to_obj != 0 && bot_updates)
             {
                 blk_start = to_obj;
                 blk_end = to_obj + actual_plab_size * 8;
@@ -2137,6 +2137,9 @@ static void do_hwgc_work(void *opaque)
         }
     }
 
+    // 设置成256bit
+    // 一次性读取 cardTablePtr + 0x38 cardTablePtr + 0x40
+    // 一次性读取 parscanThreadPtr + 0x30 ~ 0x48
     static uintptr_t byte_map, res;
     static size_t card_index, last_index;
     static uintptr_t node_allocator_ptr, node, old_node, new_top;
