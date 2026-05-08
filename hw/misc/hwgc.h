@@ -73,6 +73,7 @@ typedef struct
 
 struct HWGCParameter
 {
+    uint32_t localBot;
     uint32_t chunkSize;
     uint32_t ageThreshold;
     uint32_t heapRegionBias;
@@ -105,6 +106,12 @@ struct HWGCParameter
     uint8_t useCompressedKlassPointers;
 };
 
+struct HWGCCache
+{
+    uintptr_t array_heap_region_cache;
+    bool heap_type_is_young;
+};
+
 struct HWGCSoftRelated
 {
     uint64_t par0;
@@ -120,9 +127,9 @@ enum HWGC_EXEC_STEP
 
     STEP_DISPATCH,
 
-    STEP_PARTIAL_ARRAY,
+    STEP_OOP,
+    STEP_ARRAY,
 
-    STEP_COMMON_OOP,
     STEP_Copy2Survivor,
 
     STEP_ALLOC,

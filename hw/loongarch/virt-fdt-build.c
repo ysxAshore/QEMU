@@ -461,28 +461,28 @@ static void fdt_add_rtc_node(LoongArchVirtMachineState *lvms,
     g_free(nodename);
 }
 
-static void fdt_add_test_device_node(LoongArchVirtMachineState *lvms,
-                                     uint32_t *pch_pic_phandle)
-{
-    // 参考 rtc_node 设计
-    /*
-    /test@100d1000 {
-        compatible = "loongson,test-device";
-        reg = <0x00 0x100d1000 0x00 0x100>;   // 地址 + 大小（各占 2 cells）
-    };
-     */
-    char *nodename;
-    hwaddr base = VIRT_TEST_DEVICE_BASE;
-    hwaddr size = VIRT_TEST_DEVICE_LEN;
-    MachineState *ms = MACHINE(lvms);
-
-    nodename = g_strdup_printf("/test@%" PRIx64, base);
-    qemu_fdt_add_subnode(ms->fdt, nodename);
-    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
-                            "loongson,test-device");
-    qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg", 2, base, 2, size);
-    g_free(nodename);
-}
+// static void fdt_add_test_device_node(LoongArchVirtMachineState *lvms,
+//                                      uint32_t *pch_pic_phandle)
+//{
+//     // 参考 rtc_node 设计
+//     /*
+//     /test@100d1000 {
+//         compatible = "loongson,test-device";
+//         reg = <0x00 0x100d1000 0x00 0x100>;   // 地址 + 大小（各占 2 cells）
+//     };
+//      */
+//     char *nodename;
+//     hwaddr base = VIRT_TEST_DEVICE_BASE;
+//     hwaddr size = VIRT_TEST_DEVICE_LEN;
+//     MachineState *ms = MACHINE(lvms);
+//
+//     nodename = g_strdup_printf("/test@%" PRIx64, base);
+//     qemu_fdt_add_subnode(ms->fdt, nodename);
+//     qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
+//                             "loongson,test-device");
+//     qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg", 2, base, 2, size);
+//     g_free(nodename);
+// }
 
 static void fdt_add_ged_reset(LoongArchVirtMachineState *lvms)
 {
