@@ -457,7 +457,7 @@ static void do_hwgc_work(void *opaque)
         if (hwgc->sub_state == 9)
         {
             hwgc->cache.heap_type_is_young = type != 0;
-            hwgc->sub_state = 10;
+            TRY_R(10, dest + ArrayLenOff, &type, 4, "read new dest array length", STEP_ARRAY);
         }
 
         if (hwgc->sub_state == 10)
@@ -466,7 +466,7 @@ static void do_hwgc_work(void *opaque)
             uintptr_t low = dest + ArrayElementOff + dest_length * OopSize;
             uintptr_t high = dest + ArrayElementOff + (dest_length + hwgc->pars.chunkSize) * OopSize;
             p = dest + ArrayElementOff;
-            q = p + (dest_length + hwgc->pars.chunkSize) * OopSize;
+            q = p + typet * OopSize;
             if (p < low)
                 p = low;
             if (q > high)
@@ -480,6 +480,400 @@ static void do_hwgc_work(void *opaque)
 
             hwgc->done_to = STEP_FETCH;
             hwgc->doneto_sub_state = 0;
+        }
+    }
+
+    uintptr_t do_src, do_dest;
+    if (hwgc->state == STEP_TRACE_PLUS)
+    {
+        if (p < q)
+        {
+            do_src = p - dest + src;
+            do_dest = p;
+            p += OopSize;
+            hwgc->state = STEP_DO_OOP_WORK;
+        }
+        else
+        {
+            hwgc->state = hwgc->done_to;
+            hwgc->sub_state = hwgc->doneto_sub_state;
+        }
+    }
+
+    static uintptr_t heap_oop;
+    static uint region, region_attr;
+    static bool bool_base_value;
+    if (hwgc->state == STEP_DO_OOP_WORK)
+    {
+        if (hwgc->sub_state == 0)
+            TRY_R(1, do_src, &heap_oop, 8, "read heap oop", STEP_DO_OOP_WORK);
+
+        if (hwgc->sub_state == 1)
+        {
+            if (hwgc->pars.useCompressedOops)
+                heap_oop = (uint)heap_oop;
+
+            if (heap_oop == 0)
+                hwgc->sub_state = 9;
+            else
+            {
+                if (hwgc->pars.useCompressedOops)
+                    heap_oop = hwgc->pars.compressedOopBase + (heap_oop << hwgc->pars.compressedOopShift);
+
+                int shift_obj = heap_oop >> hwgc->pars.regionAttrShiftBy;
+                if (shift_obj != hwgc->cache.obj_shift_cache)
+                {
+                    uintptr_t region_attr_ptr = hwgc->pars.regionAttrBiasedBase + shift_obj * 2 + 1;
+                    tag = safeAccessHWAddr(hwgc, region_attr_ptr, &region_attr, 2, "read region attr", false, STEP_DO_OOP_WORK, 2);
+                    if (tag)
+                    {
+                        hwgc->cache.attr_type_cache = region_attr >> 8;
+                        hwgc->sub_state = 2;
+                    }
+                }
+                else
+                    hwgc->sub_state = 2;
+            }
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            int8_t region_attr_type = hwgc->cache.attr_type_cache;
+            if (region_attr_type >= 0)
+            {
+                uintptr_t writeValue = hwgc->pars.useCompressedOops ? do_dest + 0x1 : do_dest;
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.taskQueueElemsBase + hwgc->cache.localBot * 8, &writeValue, 8, "write taskqueue elems", STEP_DO_OOP_WORK, );
+                if (tag)
+                    hwgc->sub_state = 7;
+            }
+            else if (((do_dest ^ heap_oop) >> hwgc->pars.logOfHRGrainBytes) != 0)
+            {
+                if (region_attr_type == -2)
+                    hwgc->sub_state = 3;
+                else
+                    hwgc->sub_state = 6;
+            }
+            else
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            region = (heap_oop - ((uintptr_t)hwgc->pars.heapRegionBias << hwgc->pars.heapRegionShiftBy)) >> hwgc->pars.logOfHRGrainBytes;
+            if (region != hwgc->cache.do_oop_region_cache)
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "read bool base value", false, STEP_DO_OOP_WORK, 4);
+                if (tag)
+                    hwgc->sub_state = 4;
+            }
+            else
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (!bool_base_value)
+            {
+                hwgc->sub_state = 6;
+                hwgc->cache.do_oop_region_cache = region;
+            }
+            else
+            {
+                bool_base_value = false;
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.humogousReclaimCandidateBoolBase + region, &bool_base_value, 1, "write bool base value", true, STEP_DO_OOP_WORK, 5);
+                if (tag)
+                    hwgc->sub_state = 5;
+            }
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            uintptr_t region_attr_dest = hwgc->pars.regionAttrBase + region * 2;
+            int8_t dest_value = -1;
+            tag = safeAccessHWAddr(hwgc, region_attr_dest + 1, &dest_value, 1, "write dest attr type is notincset", true, STEP_DO_OOP_WORK, 6);
+            if (tag)
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            if (scanning_in_young)
+                hwgc->sub_state = 7;
+            else
+            {
+                hwgc->state = STEP_AOP;
+                hwgc->sub_state = 0;
+            }
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            hwgc->state = hwgc->previous;
+            hwgc->sub_state = hwgc->previous_sub_state;
+        }
+    }
+
+    // 设置成256bit
+    // 一次性读取 cardTablePtr + 0x38 cardTablePtr + 0x40
+    // 一次性读取 parscanThreadPtr + 0x30 ~ 0x48
+    static uintptr_t byte_map, res;
+    static size_t card_index, last_index;
+    static uintptr_t node_allocator_ptr, node, old_node, new_top;
+    if (hwgc->state == STEP_AOP)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            if ((region_attr & 0xff) == 0)
+            {
+                hwgc->state = hwgc->previous;
+                hwgc->sub_state = hwgc->previous_sub_state;
+            }
+            else
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.cardTablePtr + 0x38, &byte_map, 8, "read byte map", false, STEP_AOP, 1);
+                if (tag)
+                    hwgc->sub_state = 1;
+            }
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.cardTablePtr + 0x40, &byte_map_base, 8, "read byte map base", false, STEP_AOP, 2);
+            if (tag)
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            res = byte_map_base + (dest >> 9);
+            card_index = res - byte_map;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x1b0, &last_index, 8, "read last enqueued card index", false, STEP_AOP, 3);
+            if (tag)
+                hwgc->sub_state = 3;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            if (card_index == last_index)
+            {
+                hwgc->state = hwgc->previous;
+                hwgc->sub_state = hwgc->previous_sub_state;
+            }
+            else
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "read queue index", false, STEP_AOP, 4);
+                if (tag)
+                    hwgc->sub_state = 4;
+            }
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            index = index / 8;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "read queue buffer", false, STEP_AOP, 5);
+            if (tag)
+                hwgc->sub_state = 5;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            if (index == 0)
+            {
+                old_node = 0;
+                if (buffer != 0)
+                {
+                    originValue = 0;
+                    old_node = buffer - 0x10;
+                    tag = safeAccessHWAddr(hwgc, old_node, &originValue, 8, "write old node", true, STEP_AOP, 10);
+                    if (tag)
+                        hwgc->sub_state = 10;
+                }
+                else
+                    hwgc->sub_state = 10;
+            }
+            else
+                hwgc->sub_state = 6;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            index = index - 1;
+            tag = safeAccessHWAddr(hwgc, buffer + index * 8, &res, 8, "write buffer index entry", true, STEP_AOP, 7);
+            if (tag)
+                hwgc->sub_state = 7;
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            index = index * 8;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &index, 8, "write queue index", true, STEP_AOP, 8);
+            if (tag)
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x1b0, &card_index, 8, "write last enqueued card index", true, STEP_AOP, 9);
+            if (tag)
+                hwgc->sub_state = 9;
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            hwgc->state = hwgc->previous;
+            hwgc->sub_state = hwgc->previous_sub_state;
+            return;
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x20, &node_allocator_ptr, 8, "read node allocator ptr", false, STEP_AOP, 11);
+            if (tag)
+                hwgc->sub_state = 11;
+        }
+
+        if (hwgc->sub_state == 11)
+        {
+            new_top = 0;
+            // @notice: loongarch and x86 this address is not equal
+            //          BufferNode::Allocator free_list and free_count
+            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x80, &node, 8, "read node", false, STEP_AOP, 12);
+            if (tag)
+                hwgc->sub_state = 12;
+        }
+
+        if (hwgc->sub_state == 12)
+        {
+            if (node != 0)
+            {
+                tag = safeAccessHWAddr(hwgc, node + 0x8, &new_top, 8, "read new top", false, STEP_AOP, 13);
+                if (tag)
+                    hwgc->sub_state = 13;
+            }
+            else
+                hwgc->sub_state = 13;
+        }
+
+        if (hwgc->sub_state == 13)
+        {
+            tag = safeAccessHWAddr(hwgc, node_allocator_ptr + 0x80, &new_top, 8, "write node", true, STEP_AOP, 14);
+            if (tag)
+                hwgc->sub_state = 14;
+        }
+
+        if (hwgc->sub_state == 14)
+        {
+            if (node != 0)
+            {
+                originValue = 0;
+                tag = safeAccessHWAddr(hwgc, node + 0x8, &originValue, 8, "write node + 0x8", true, STEP_AOP, 15);
+                if (tag)
+                    hwgc->sub_state = 15;
+            }
+            else
+            {
+                ++enqueued_irq;
+                hwgc->softPars.par0 = node_allocator_ptr;
+                hwgc->state = STEP_DEBUG;
+                hwgc->sub_state = 0;
+                hwgc->wake_state = STEP_AOP;
+                hwgc->wake_sub_state = 15;
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc_raise_irq(hwgc, ENQUEUE_FAILED_IRQ);
+                    bql_unlock();
+                }
+#ifdef DEBUG_ENABLE
+                printf("%lx tracing now enter the state %x\n", res, STEP_DEBUG);
+#endif
+                return;
+            }
+        }
+
+        if (hwgc->sub_state == 15)
+        {
+            if (hwgc->wake_state == STEP_AOP && hwgc->wake_sub_state == 15 && hwgc->softPars.par0 == node_allocator_ptr)
+                node = hwgc->softPars.res;
+            buffer = node + 0x10;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x58, &buffer, 8, "write buffer", true, STEP_AOP, 16);
+            if (tag)
+                hwgc->sub_state = 16;
+        }
+
+        if (hwgc->sub_state == 16)
+        {
+            tag = safeAccessHWAddr(hwgc, node_allocator_ptr, &index, 8, "read new index", false, STEP_AOP, 17);
+            if (tag)
+                hwgc->sub_state = 17;
+        }
+
+        if (hwgc->sub_state == 17)
+        {
+            originValue = index * 8;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x48, &originValue, 8, "write index", true, STEP_AOP, 18);
+            if (tag)
+                hwgc->sub_state = 18;
+        }
+
+        if (hwgc->sub_state == 18)
+        {
+            if (old_node == 0)
+                hwgc->sub_state = 6;
+            else
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "read buffer list ptr + 0x10", false, STEP_AOP, 19);
+                if (tag)
+                    hwgc->sub_state = 19;
+            }
+        }
+
+        if (hwgc->sub_state == 19)
+        {
+            originValue = originValue + index;
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x40, &originValue, 8, "write buffer list ptr + 0x10", true, STEP_AOP, 20);
+            if (tag)
+                hwgc->sub_state = 20;
+        }
+
+        if (hwgc->sub_state == 20)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &originValue, 8, "read buffer list ptr", false, STEP_AOP, 21);
+            if (tag)
+                hwgc->sub_state = 21;
+        }
+
+        if (hwgc->sub_state == 21)
+        {
+            tag = safeAccessHWAddr(hwgc, old_node + 0x8, &originValue, 8, "write old node + 0x8", true, STEP_AOP, 22);
+            if (tag)
+                hwgc->sub_state = 22;
+        }
+
+        if (hwgc->sub_state == 22)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x30, &old_node, 8, "write buffer list ptr", true, STEP_AOP, 23);
+            if (tag)
+                hwgc->sub_state = 23;
+        }
+
+        if (hwgc->sub_state == 23)
+        {
+            tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &originValue, 8, "read buffer list ptr + 0x8", false, STEP_AOP, 24);
+            if (tag)
+                hwgc->sub_state = 24;
+        }
+
+        if (hwgc->sub_state == 24)
+        {
+            if (originValue == 0)
+            {
+                tag = safeAccessHWAddr(hwgc, hwgc->pars.parScanThreadStatePtr + 0x38, &old_node, 8, "write buffer list ptr + 0x8", true, STEP_AOP, 6);
+                if (tag)
+                    hwgc->sub_state = 6;
+            }
+            else
+                hwgc->sub_state = 6;
         }
     }
 }

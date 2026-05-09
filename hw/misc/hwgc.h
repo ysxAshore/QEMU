@@ -108,8 +108,23 @@ struct HWGCParameter
 
 struct HWGCCache
 {
-    uintptr_t array_heap_region_cache;
+    int array_heap_region_cache;
     bool heap_type_is_young;
+    int obj_shift_cache;
+    int8_t attr_type_cache;
+    int do_oop_region_cache;
+    bool byte_about_valid;
+    uintptr_t byte_map_cache;
+    uintptr_t byte_map_base_cache;
+    bool last_index_valid;
+    uintptr_t last_index_cache;
+    bool parScan_offset40_valid;
+    uintptr_t index_cache;
+    uintptr_t buffer_cache;
+    bool parScan_offset20_valid;
+    uintptr_t node_allocator_ptr_cache;
+    uintptr_t offset30_cache;
+    uintptr_t offset38_cache;
 };
 
 struct HWGCSoftRelated
