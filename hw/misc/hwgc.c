@@ -120,6 +120,30 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
     return true;
 }
 
+static int my_cmpxchg(HWGCState *hwgc, uintptr_t vaddr, uint64_t old_val, uint64_t new_val)
+{
+    hwaddr paddr = hwgc_translate_va(hwgc, vaddr);
+    hwaddr xlat = paddr;
+    hwaddr len = sizeof(uint64_t);
+    MemoryRegion *mr = address_space_translate(hwgc->cpu->as, paddr, &xlat, &len, true, MEMTXATTRS_UNSPECIFIED);
+    if (!memory_region_is_ram(mr) || len < sizeof(uint64_t))
+    {
+        printf("memory region not is ram");
+        return -1;
+    }
+
+    uint8_t *host_base = memory_region_get_ram_ptr(mr);
+    uint64_t *host_p = (uint64_t *)(host_base + xlat);
+    uint64_t seen = qatomic_cmpxchg(host_p, old_val, new_val);
+    if (seen == old_val)
+    {
+        memory_region_set_dirty(mr, xlat, sizeof(uint64_t));
+        return 1;
+    }
+    else
+        return 0;
+}
+
 static uint64_t hwgc_mmio_read(void *opaque, hwaddr addr, unsigned size)
 {
     HWGCState *hwgc = opaque;
@@ -242,34 +266,52 @@ static void do_par_allocate_iml(void *opaque)
     {
         hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x10, &hwgc->alloc_top, 8, "read alloc_region + 0x10", false, STEP_ACCESS_END);
         if (hwgc->access_ok)
+        {
+            printf("alloc_top %lx\n", hwgc->alloc_top);
             hwgc->state = STEP_ACCESS_END;
+        }
     }
 
     if (hwgc->state == STEP_ACCESS_END)
     {
         hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x8, &hwgc->alloc_end, 8, "read alloc_region + 0x8", false, STEP_BRANCH);
         if (hwgc->access_ok)
+        {
+            printf("alloc_end %lx\n", hwgc->alloc_end);
             hwgc->state = STEP_BRANCH;
+        }
     }
 
     if (hwgc->state == STEP_BRANCH)
     {
         hwgc->alloc_available = (hwgc->alloc_end - hwgc->alloc_top) / 8;
         hwgc->want_to_allocate = hwgc->alloc_available > hwgc->pars.desired_word_size ? hwgc->pars.desired_word_size : hwgc->alloc_available;
-        if (hwgc->want_to_allocate > hwgc->pars.min_word_size)
+        printf("Branching want %lx desired %lx available %lx\n", hwgc->want_to_allocate, hwgc->pars.desired_word_size, hwgc->alloc_available);
+        if (hwgc->want_to_allocate >= hwgc->pars.min_word_size)
         {
-
-            hwgc->irq_pars.par0 = hwgc->pars.alloc_region + 0x10;
-            hwgc->irq_pars.par1 = hwgc->alloc_top;
-            hwgc->irq_pars.par2 = hwgc->alloc_top + hwgc->want_to_allocate * 8;
-            hwgc->wake_state = STEP_ATOMIC_RESULT;
-            hwgc->state = STEP_ATOMIC;
-            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            int signal = my_cmpxchg(hwgc, hwgc->pars.alloc_region + 0x10, hwgc->alloc_top, hwgc->alloc_top + hwgc->want_to_allocate * 8);
+            if (signal == -1)
             {
-                bql_lock();
-                hwgc_raise_irq(hwgc, ATOMIC_IRQ);
-                bql_unlock();
+                hwgc->irq_pars.par0 = hwgc->pars.alloc_region + 0x10;
+                hwgc->irq_pars.par1 = hwgc->alloc_top;
+                hwgc->irq_pars.par2 = hwgc->alloc_top + hwgc->want_to_allocate * 8;
+                hwgc->wake_state = STEP_ATOMIC_RESULT;
+                hwgc->state = STEP_ATOMIC;
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc_raise_irq(hwgc, ATOMIC_IRQ);
+                    bql_unlock();
+                }
             }
+            else if (signal)
+            {
+                hwgc->irq_pars.obj_ptr = hwgc->alloc_top;
+                hwgc->irq_pars.actual_plab_size = hwgc->want_to_allocate;
+                hwgc->state = STEP_DONE;
+            }
+            else
+                hwgc->state = STEP_ACCESS_TOP;
         }
         else
         {
@@ -281,6 +323,7 @@ static void do_par_allocate_iml(void *opaque)
 
     if (hwgc->state == STEP_ATOMIC_RESULT)
     {
+        printf("Atomic result %lx %lx\n", hwgc->irq_pars.obj_ptr, hwgc->alloc_top);
         if (hwgc->irq_pars.obj_ptr == hwgc->alloc_top)
         {
             hwgc->irq_pars.obj_ptr = hwgc->alloc_top;
