@@ -705,6 +705,8 @@ static void *hwgc_work_thread(void *opaque)
             }
         }
 
+        printf("do hwgc end\n");
+
         qatomic_and(&hwgc->status, ~HWGC_STATUS_COMPUTING);
         smp_mb__after_rmw();
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
