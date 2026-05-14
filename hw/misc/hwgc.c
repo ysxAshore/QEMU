@@ -19,12 +19,15 @@ struct HWGCState
     uint32_t status; // soft write to enable device
     uint32_t irq_status;
     uint32_t state;
+    uint32_t sub_state;
     uint32_t wake_state;
+    uint32_t wake_sub_state;
 
     // data
     bool access_ok;
-    uintptr_t alloc_top, alloc_end;
-    size_t alloc_available, want_to_allocate;
+    int par_allocate_iml_sel, par_allocate_sel, is_full_value, wait_num;
+    uintptr_t alloc_top, alloc_end, result;
+    size_t alloc_available, want_to_allocate, actual_word_size;
 
     // pars
     struct HWGC_PARALLOCATE_PARS pars;
@@ -33,6 +36,7 @@ struct HWGCState
     struct HWGC_IRQ_PARS irq_pars;
 
     CPUState *cpu;
+    HWGCTLBEntry tlb_cache[HWGC_TLB_SIZE];
 };
 
 // PCI/PCIe 支持两种中断机制
@@ -58,15 +62,26 @@ static void hwgc_lower_irq(HWGCState *hwgc, uint32_t val)
         pci_set_irq(&hwgc->pdev, 0);
 }
 
+static inline unsigned int hwgc_tlb_hash(uintptr_t va_page) { return va_page >> (TARGET_PAGE_BITS) & (HWGC_TLB_SIZE - 1); }
+static inline void flush_hwgc_tlb(HWGCState *hwgc) { memset(hwgc->tlb_cache, 0, HWGC_TLB_SIZE * sizeof(HWGCTLBEntry)); }
+
 static hwaddr hwgc_translate_va(HWGCState *hwgc, uintptr_t vaddr)
 {
     uintptr_t va_page = vaddr & TARGET_PAGE_MASK;
+    unsigned int idx = hwgc_tlb_hash(va_page);
+    HWGCTLBEntry *entry = &hwgc->tlb_cache[idx];
+
+    if (entry->va_page == va_page)
+        return entry->pa_page | (vaddr & ~TARGET_PAGE_MASK);
+
     CPUState *cpu = hwgc->cpu;
     hwaddr pa_page = cpu_get_phys_page_debug(cpu, va_page);
-
-    if (pa_page == (hwaddr)-1)
-        // Handle invalid translation
+    if (pa_page == (hwaddr)-1 || pa_page == va_page)
         return (hwaddr)-1;
+
+    entry->va_page = va_page;
+    entry->pa_page = pa_page;
+
     return pa_page | (vaddr & ~TARGET_PAGE_MASK);
 }
 
@@ -92,7 +107,7 @@ static int access_hwaddr(HWGCState *hwgc, uintptr_t va, void *value, int size, b
 
     return 0;
 }
-static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int size, const char *debug_info, bool write, enum HWGC_EXEC_STEP next)
+static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int size, const char *debug_info, bool write, enum HWGC_EXEC_STEP state, int sub_state)
 {
     int ret = access_hwaddr(hwgc, addr, data, size, write, debug_info);
 
@@ -102,16 +117,17 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
         if (size <= 8 && size > 0)
             memcpy(&value, data, size);
 
-        hwgc->irq_pars.par0 = addr;
-        hwgc->irq_pars.par1 = value;
-        hwgc->irq_pars.par2 = write;
-        hwgc->irq_pars.par3 = size;
-        hwgc->irq_pars.obj_ptr = (uintptr_t)data;
-        hwgc->wake_state = next;
-        hwgc->state = STEP_PAGE_FAULT;
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
         {
             bql_lock();
+            hwgc->irq_pars.par0 = addr;
+            hwgc->irq_pars.par1 = value;
+            hwgc->irq_pars.par2 = write;
+            hwgc->irq_pars.par3 = size;
+            hwgc->irq_pars.obj_ptr = (uintptr_t)data;
+            hwgc->wake_state = state;
+            hwgc->wake_sub_state = sub_state;
+            hwgc->state = STEP_PAGE_FAULT;
             hwgc_raise_irq(hwgc, PAGE_FAULT_IRQ);
             bql_unlock();
         }
@@ -120,25 +136,47 @@ static bool safeAccessHWAddr(HWGCState *hwgc, uintptr_t addr, void *data, int si
     return true;
 }
 
-static int my_cmpxchg(HWGCState *hwgc, uintptr_t vaddr, uint64_t old_val, uint64_t new_val)
+static int my_cmpxchg(HWGCState *hwgc, uintptr_t vaddr, uint64_t old_val, uint64_t new_val, int size)
 {
     hwaddr paddr = hwgc_translate_va(hwgc, vaddr);
-    hwaddr xlat = paddr;
-    hwaddr len = sizeof(uint64_t);
-    MemoryRegion *mr = address_space_translate(hwgc->cpu->as, paddr, &xlat, &len, true, MEMTXATTRS_UNSPECIFIED);
-    if (!memory_region_is_ram(mr) || len < sizeof(uint64_t))
+    if (paddr == (hwaddr)-1)
     {
-        printf("memory region not is ram");
+        printf("translate failed\n");
+        return -2;
+    }
+    hwaddr xlat = paddr;
+    hwaddr len = size;
+    MemoryRegion *mr = address_space_translate(hwgc->cpu->as, paddr, &xlat, &len, true, MEMTXATTRS_UNSPECIFIED);
+    if (!memory_region_is_ram(mr) || len < size)
+    {
+        printf("memory region not is ram\n");
         return -1;
     }
 
     uint8_t *host_base = memory_region_get_ram_ptr(mr);
-    uint64_t *host_p = (uint64_t *)(host_base + xlat);
-    uint64_t seen = qatomic_cmpxchg(host_p, old_val, new_val);
-    if (seen == old_val)
+    if (size == 8)
     {
-        memory_region_set_dirty(mr, xlat, sizeof(uint64_t));
-        return 1;
+        uint64_t *host_p = (uint64_t *)(host_base + xlat);
+        uint64_t seen = qatomic_cmpxchg(host_p, old_val, new_val);
+        if (seen == old_val)
+        {
+            memory_region_set_dirty(mr, xlat, sizeof(uint64_t));
+            return 1;
+        }
+        else
+            return 0;
+    }
+    else if (size == 4)
+    {
+        uint *host_p = (uint *)(host_base + xlat);
+        uint seen = qatomic_cmpxchg(host_p, (uint)old_val, (uint)new_val);
+        if (seen == (uint)old_val)
+        {
+            memory_region_set_dirty(mr, xlat, sizeof(uint));
+            return 1;
+        }
+        else
+            return 0;
     }
     else
         return 0;
@@ -174,7 +212,7 @@ static uint64_t hwgc_mmio_read(void *opaque, hwaddr addr, unsigned size)
         return hwgc->irq_pars.obj_ptr;
 
     case REG_IRQ_RES1:
-        return hwgc->irq_pars.actual_plab_size;
+        return hwgc->irq_pars.actual_word_size;
 
     default:
         return ~0ULL;
@@ -205,14 +243,18 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
     }
 
     qemu_mutex_lock(&hwgc->thr_mutex);
-    if (addr >= REG_PAR0 && addr <= REG_PAR2)
+    if (addr >= REG_PAR0 && addr <= REG_PAR6)
     {
         if (qatomic_read(&hwgc->status) & HWGC_STATUS_COMPUTING || size != 8)
             goto _return;
         static const size_t par_offsets[] = {
-            offsetof(struct HWGC_PARALLOCATE_PARS, alloc_region),      // REG_PAR0: lo=chunkSize, hi=ageThreshold
-            offsetof(struct HWGC_PARALLOCATE_PARS, min_word_size),     // REG_PAR1: lo=heapRegionBias, hi=regionAttrShiftBy
-            offsetof(struct HWGC_PARALLOCATE_PARS, desired_word_size), // REG_PAR2: lo=heapRegionShiftBy, hi=logOfHRGrainBytes
+            offsetof(struct HWGC_PARALLOCATE_PARS, dest_attr_type),
+            offsetof(struct HWGC_PARALLOCATE_PARS, allocator_ptr),
+            offsetof(struct HWGC_PARALLOCATE_PARS, alloc_region),
+            offsetof(struct HWGC_PARALLOCATE_PARS, min_word_size),
+            offsetof(struct HWGC_PARALLOCATE_PARS, desired_word_size),
+            offsetof(struct HWGC_PARALLOCATE_PARS, freelist_lock_ptr),
+            offsetof(struct HWGC_PARALLOCATE_PARS, thread),
         };
         int idx = (addr - REG_PAR0) / 8;
         uint8_t *base = (uint8_t *)&hwgc->pars;
@@ -222,7 +264,7 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
     if (addr == REG_START_WORK)
     {
         hwgc->cpu = current_cpu;
-        hwgc->state = STEP_ACCESS_TOP;
+        hwgc->state = STEP_PAR_ALLOCATE;
 
         qatomic_or(&hwgc->status, HWGC_STATUS_COMPUTING);
         qemu_cond_signal(&hwgc->thr_cond);
@@ -240,6 +282,10 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
             memcpy((void *)hwgc->irq_pars.obj_ptr, (void *)&val, hwgc->irq_pars.par3);
         hwgc->irq_pars.obj_ptr = val;
     }
+
+    if (addr == REG_IRQ_RES1)
+        hwgc->irq_pars.actual_word_size = val;
+
 _return:
     qemu_mutex_unlock(&hwgc->thr_mutex);
 }
@@ -262,76 +308,368 @@ static void do_par_allocate_iml(void *opaque)
 {
     HWGCState *hwgc = opaque;
 
-    if (hwgc->state == STEP_ACCESS_TOP)
+    if (hwgc->state == STEP_PAR_ALLOCATE)
     {
-        hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x10, &hwgc->alloc_top, 8, "read alloc_region + 0x10", false, STEP_ACCESS_END);
-        if (hwgc->access_ok)
+        if (hwgc->sub_state == 0)
         {
-            printf("alloc_top %lx\n", hwgc->alloc_top);
-            hwgc->state = STEP_ACCESS_END;
-        }
-    }
-
-    if (hwgc->state == STEP_ACCESS_END)
-    {
-        hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x8, &hwgc->alloc_end, 8, "read alloc_region + 0x8", false, STEP_BRANCH);
-        if (hwgc->access_ok)
-        {
-            printf("alloc_end %lx\n", hwgc->alloc_end);
-            hwgc->state = STEP_BRANCH;
-        }
-    }
-
-    if (hwgc->state == STEP_BRANCH)
-    {
-        hwgc->alloc_available = (hwgc->alloc_end - hwgc->alloc_top) / 8;
-        hwgc->want_to_allocate = hwgc->alloc_available > hwgc->pars.desired_word_size ? hwgc->pars.desired_word_size : hwgc->alloc_available;
-        printf("Branching want %lx desired %lx available %lx\n", hwgc->want_to_allocate, hwgc->pars.desired_word_size, hwgc->alloc_available);
-        if (hwgc->want_to_allocate >= hwgc->pars.min_word_size)
-        {
-            int signal = my_cmpxchg(hwgc, hwgc->pars.alloc_region + 0x10, hwgc->alloc_top, hwgc->alloc_top + hwgc->want_to_allocate * 8);
-            if (signal == -1)
+            hwgc->result = 0;
+            hwgc->actual_word_size = 0;
+            if (hwgc->pars.dest_attr_type == 0)
             {
-                hwgc->irq_pars.par0 = hwgc->pars.alloc_region + 0x10;
-                hwgc->irq_pars.par1 = hwgc->alloc_top;
-                hwgc->irq_pars.par2 = hwgc->alloc_top + hwgc->want_to_allocate * 8;
-                hwgc->wake_state = STEP_ATOMIC_RESULT;
-                hwgc->state = STEP_ATOMIC;
+                hwgc->state = STEP_ALLOCATE_IML;
+                hwgc->sub_state = 0;
+                hwgc->par_allocate_iml_sel = 0;
+            }
+            else if (hwgc->pars.dest_attr_type == 1)
+            {
+                hwgc->state = STEP_ALLOCATE;
+                hwgc->sub_state = 0;
+                hwgc->par_allocate_sel = 0;
+            }
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            if (hwgc->result == 0)
+            {
+                hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.allocator_ptr + 0x10, &hwgc->is_full_value, 8, "read allocator_ptr + 0x10", false, STEP_PAR_ALLOCATE, 2);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 2;
+            }
+            else
+                hwgc->sub_state = 10;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            bool is_full = hwgc->pars.dest_attr_type == 0 ? hwgc->is_full_value & 0x1 : hwgc->is_full_value & 0x2;
+            if (!is_full)
+                hwgc->sub_state = 3;
+            else
+                hwgc->sub_state = 10;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            if (hwgc->pars.dest_attr_type == 0)
+            {
+                hwgc->state = STEP_ALLOCATE_IML;
+                hwgc->sub_state = 0;
+                hwgc->par_allocate_iml_sel = 1;
+            }
+            else if (hwgc->pars.dest_attr_type == 1)
+            {
+                hwgc->state = STEP_ALLOCATE;
+                hwgc->sub_state = 0;
+                hwgc->par_allocate_sel = 1;
+            }
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (hwgc->result == 0)
+                hwgc->sub_state = 5;
+            else
+                hwgc->sub_state = 10;
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            uintptr_t lock_ptr = hwgc->pars.freelist_lock_ptr;
+            int signal = my_cmpxchg(hwgc, lock_ptr + 8, 0, 1, 4);
+            if (signal == -1)
+                assert(0);
+            else if (signal == -2)
+            {
                 if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
                 {
                     bql_lock();
+                    hwgc->irq_pars.par0 = lock_ptr + 8;
+                    hwgc->irq_pars.par1 = 0;
+                    hwgc->irq_pars.par2 = 1;
+                    hwgc->irq_pars.par3 = 4;
+                    hwgc->wake_state = STEP_PAR_ALLOCATE;
+                    hwgc->wake_sub_state = 11;
+                    hwgc->state = STEP_ATOMIC_IRQ;
                     hwgc_raise_irq(hwgc, ATOMIC_IRQ);
                     bql_unlock();
+                    return;
                 }
             }
-            else if (signal)
+            else if (signal == 1)
             {
-                hwgc->irq_pars.obj_ptr = hwgc->alloc_top;
-                hwgc->irq_pars.actual_plab_size = hwgc->want_to_allocate;
-                hwgc->state = STEP_DONE;
+                hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr, &hwgc->pars.thread, 8, "write thread", true, STEP_PAR_ALLOCATE, 6);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 6;
             }
             else
-                hwgc->state = STEP_ACCESS_TOP;
+                hwgc->sub_state = 5;
         }
-        else
+
+        if (hwgc->sub_state == 11)
         {
-            hwgc->irq_pars.obj_ptr = 0;
-            hwgc->irq_pars.actual_plab_size = 0;
+            if ((uint)hwgc->irq_pars.obj_ptr == 0)
+            {
+                uintptr_t lock_ptr = hwgc->pars.freelist_lock_ptr;
+                hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr, &hwgc->pars.thread, 8, "write thread", true, STEP_PAR_ALLOCATE, 6);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 6;
+            }
+            else
+                hwgc->sub_state = 5;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            {
+                bql_lock();
+                hwgc->wake_state = STEP_PAR_ALLOCATE;
+                hwgc->wake_sub_state = 7;
+                hwgc->state = STEP_ATTEMPT_IRQ;
+                hwgc_raise_irq(hwgc, ATTEMPT_IRQ);
+                bql_unlock();
+                return;
+            }
+        }
+
+        if (hwgc->sub_state == 7)
+        {
+            hwgc->result = hwgc->irq_pars.obj_ptr;
+            hwgc->actual_word_size = hwgc->irq_pars.actual_word_size;
+            if (hwgc->result == 0)
+            {
+                uintptr_t addr = hwgc->pars.allocator_ptr + (hwgc->pars.dest_attr_type ? 0x11 : 0x10);
+                uint data = 1;
+                hwgc->access_ok = safeAccessHWAddr(hwgc, addr, &data, 1, "write full value", true, STEP_PAR_ALLOCATE, 8);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 8;
+            }
+            else
+                hwgc->sub_state = 8;
+        }
+
+        if (hwgc->sub_state == 8)
+        {
+            uintptr_t lock_ptr = hwgc->pars.freelist_lock_ptr;
+            hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr + 8, &hwgc->wait_num, 4, "read wait num", false, STEP_PAR_ALLOCATE, 9);
+            if (hwgc->access_ok)
+                hwgc->sub_state = 9;
+        }
+
+        if (hwgc->sub_state == 9)
+        {
+            if (hwgc->wait_num > 1)
+            {
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+
+                    bql_lock();
+                    hwgc->irq_pars.par0 = hwgc->pars.freelist_lock_ptr;
+                    hwgc->wake_state = STEP_PAR_ALLOCATE;
+                    hwgc->wake_sub_state = 10;
+                    hwgc->state = STEP_LOCK_WAKE;
+                    hwgc_raise_irq(hwgc, LOCK_WAKE_IRQ);
+                    bql_unlock();
+                    return;
+                }
+            }
+            else
+            {
+                uint num = 0;
+                uintptr_t lock_ptr = hwgc->pars.freelist_lock_ptr;
+                hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr + 8, &num, 4, "write wait num", true, STEP_PAR_ALLOCATE, 10);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 10;
+            }
+        }
+
+        if (hwgc->sub_state == 10)
+        {
+            hwgc->irq_pars.obj_ptr = hwgc->result;
+            hwgc->irq_pars.actual_word_size = hwgc->actual_word_size;
             hwgc->state = STEP_DONE;
+            hwgc->sub_state = 0;
         }
     }
 
-    if (hwgc->state == STEP_ATOMIC_RESULT)
+    if (hwgc->state == STEP_ALLOCATE_IML)
     {
-        printf("Atomic result %lx %lx\n", hwgc->irq_pars.obj_ptr, hwgc->alloc_top);
-        if (hwgc->irq_pars.obj_ptr == hwgc->alloc_top)
+        if (hwgc->sub_state == 0)
         {
-            hwgc->irq_pars.obj_ptr = hwgc->alloc_top;
-            hwgc->irq_pars.actual_plab_size = hwgc->want_to_allocate;
-            hwgc->state = STEP_DONE;
+            hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x10, &hwgc->alloc_top, 8, "read alloc_region + 0x10", false, STEP_ALLOCATE_IML, 1);
+            if (hwgc->access_ok)
+                hwgc->sub_state = 1;
         }
-        else
-            hwgc->state = STEP_ACCESS_TOP;
+
+        if (hwgc->sub_state == 1)
+        {
+            hwgc->access_ok = safeAccessHWAddr(hwgc, hwgc->pars.alloc_region + 0x8, &hwgc->alloc_end, 8, "read alloc_region + 0x8", false, STEP_ALLOCATE_IML, 2);
+            if (hwgc->access_ok)
+                hwgc->sub_state = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            hwgc->alloc_available = (hwgc->alloc_end - hwgc->alloc_top) / 8;
+            hwgc->want_to_allocate = hwgc->alloc_available > hwgc->pars.desired_word_size ? hwgc->pars.desired_word_size : hwgc->alloc_available;
+            if (hwgc->want_to_allocate >= hwgc->pars.min_word_size)
+            {
+                int signal = my_cmpxchg(hwgc, hwgc->pars.alloc_region + 0x10, hwgc->alloc_top, hwgc->alloc_top + hwgc->want_to_allocate * 8, 8);
+                if (signal == -1)
+                    assert(0);
+                else if (signal == -2)
+                {
+                    if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                    {
+                        bql_lock();
+                        hwgc->irq_pars.par0 = hwgc->pars.alloc_region + 0x10;
+                        hwgc->irq_pars.par1 = hwgc->alloc_top;
+                        hwgc->irq_pars.par2 = hwgc->alloc_top + hwgc->want_to_allocate * 8;
+                        hwgc->irq_pars.par3 = 8;
+                        hwgc->wake_state = STEP_ALLOCATE_IML;
+                        hwgc->wake_sub_state = 4;
+                        hwgc->state = STEP_ATOMIC_IRQ;
+                        hwgc_raise_irq(hwgc, ATOMIC_IRQ);
+                        bql_unlock();
+                        return;
+                    }
+                }
+                else if (signal)
+                    hwgc->sub_state = 3;
+                else
+                    hwgc->sub_state = 0;
+            }
+            else
+            {
+                hwgc->result = 0;
+                hwgc->actual_word_size = 0;
+                hwgc->state = hwgc->par_allocate_iml_sel == 2 ? STEP_ALLOCATE : STEP_PAR_ALLOCATE;
+                hwgc->sub_state = hwgc->par_allocate_iml_sel == 2 ? 2 : hwgc->par_allocate_iml_sel == 1 ? 4
+                                                                                                        : 1;
+                return;
+            }
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (hwgc->irq_pars.obj_ptr == hwgc->alloc_top)
+                hwgc->sub_state = 3;
+            else
+                hwgc->sub_state = 0;
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            hwgc->result = hwgc->alloc_top;
+            hwgc->actual_word_size = hwgc->want_to_allocate;
+            hwgc->state = hwgc->par_allocate_iml_sel == 2 ? STEP_ALLOCATE : STEP_PAR_ALLOCATE;
+            hwgc->sub_state = hwgc->par_allocate_iml_sel == 2 ? 2 : hwgc->par_allocate_iml_sel == 1 ? 4
+                                                                                                    : 1;
+        }
+    }
+
+    if (hwgc->state == STEP_ALLOCATE)
+    {
+        if (hwgc->sub_state == 0)
+        {
+            uintptr_t lock_ptr = hwgc->pars.alloc_region + 0x40;
+            int signal = my_cmpxchg(hwgc, lock_ptr + 8, 0, 1, 4);
+            if (signal == -1)
+                assert(0);
+            else if (signal == -2)
+            {
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc->irq_pars.par0 = lock_ptr + 8;
+                    hwgc->irq_pars.par1 = 0;
+                    hwgc->irq_pars.par2 = 1;
+                    hwgc->irq_pars.par3 = 4;
+                    hwgc->wake_state = STEP_ALLOCATE;
+                    hwgc->wake_sub_state = 6;
+                    hwgc->state = STEP_ATOMIC_IRQ;
+                    hwgc_raise_irq(hwgc, ATOMIC_IRQ);
+                    bql_unlock();
+                    return;
+                }
+            }
+            else if (signal == 1)
+                hwgc->sub_state = 1;
+            else
+                hwgc->sub_state = 0;
+        }
+
+        if (hwgc->sub_state == 6)
+        {
+            if ((uint)hwgc->irq_pars.obj_ptr == 0)
+                hwgc->sub_state = 1;
+            else
+                hwgc->sub_state = 0;
+        }
+
+        if (hwgc->sub_state == 1)
+        {
+            hwgc->state = STEP_ALLOCATE_IML;
+            hwgc->sub_state = 0;
+            hwgc->par_allocate_iml_sel = 2;
+        }
+
+        if (hwgc->sub_state == 2)
+        {
+            if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+            {
+                bql_lock();
+                hwgc->irq_pars.par0 = hwgc->result;
+                hwgc->irq_pars.par1 = hwgc->actual_word_size;
+                hwgc->wake_state = STEP_ALLOCATE;
+                hwgc->wake_sub_state = 3;
+                hwgc->state = STEP_ALLOCATE_IRQ;
+                hwgc_raise_irq(hwgc, ALLOCATE_IRQ);
+                bql_unlock();
+                return;
+            }
+        }
+
+        if (hwgc->sub_state == 3)
+        {
+            uintptr_t lock_ptr = hwgc->pars.alloc_region + 0x40;
+            hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr + 8, &hwgc->wait_num, 4, "read wait num", false, STEP_ALLOCATE, 3);
+            if (hwgc->access_ok)
+                hwgc->sub_state = 4;
+        }
+
+        if (hwgc->sub_state == 4)
+        {
+            if (hwgc->wait_num > 1)
+            {
+                if (qatomic_read(&hwgc->status) & HWGC_STATUS_IRQ)
+                {
+                    bql_lock();
+                    hwgc->irq_pars.par0 = hwgc->pars.alloc_region + 0x40;
+                    hwgc->wake_state = STEP_ALLOCATE;
+                    hwgc->wake_sub_state = 5;
+                    hwgc->state = STEP_LOCK_WAKE;
+                    hwgc_raise_irq(hwgc, LOCK_WAKE_IRQ);
+                    bql_unlock();
+                    return;
+                }
+            }
+            else
+            {
+                uint num = 0;
+                uintptr_t lock_ptr = hwgc->pars.alloc_region + 0x40;
+                hwgc->access_ok = safeAccessHWAddr(hwgc, lock_ptr + 8, &num, 4, "write wait num", true, STEP_ALLOCATE, 5);
+                if (hwgc->access_ok)
+                    hwgc->sub_state = 5;
+            }
+        }
+
+        if (hwgc->sub_state == 5)
+        {
+            hwgc->state = STEP_PAR_ALLOCATE;
+            hwgc->sub_state = hwgc->par_allocate_sel == 1 ? 4 : 1;
+        }
     }
 }
 
@@ -354,24 +692,14 @@ static void *hwgc_work_thread(void *opaque)
             do_par_allocate_iml(hwgc);
             if (hwgc->state == STEP_DONE)
                 break;
-            if (hwgc->state == STEP_ATOMIC)
+            if (hwgc->state == STEP_LOCK_WAKE || hwgc->state == STEP_ALLOCATE_IRQ || hwgc->state == STEP_ATTEMPT_IRQ || hwgc->state == STEP_PAGE_FAULT || hwgc->state == STEP_ATOMIC_IRQ)
             {
                 qemu_mutex_lock(&hwgc->thr_mutex);
                 while ((qatomic_read(&hwgc->status) & HWGC_STATUS_WAKE) == 0)
                     qemu_cond_wait(&hwgc->thr_cond, &hwgc->thr_mutex);
 
                 hwgc->state = hwgc->wake_state;
-                qatomic_and(&hwgc->status, ~HWGC_STATUS_WAKE);
-                qemu_mutex_unlock(&hwgc->thr_mutex);
-            }
-
-            if (hwgc->state == STEP_PAGE_FAULT)
-            {
-                qemu_mutex_lock(&hwgc->thr_mutex);
-                while ((qatomic_read(&hwgc->status) & HWGC_STATUS_WAKE) == 0)
-                    qemu_cond_wait(&hwgc->thr_cond, &hwgc->thr_mutex);
-
-                hwgc->state = hwgc->wake_state;
+                hwgc->sub_state = hwgc->wake_sub_state;
                 qatomic_and(&hwgc->status, ~HWGC_STATUS_WAKE);
                 qemu_mutex_unlock(&hwgc->thr_mutex);
             }
@@ -392,6 +720,8 @@ static void *hwgc_work_thread(void *opaque)
 static void pci_hwgc_realize(PCIDevice *pdev, Error **errp)
 {
     HWGCState *hwgc = HWGC(pdev);
+    flush_hwgc_tlb(hwgc);
+
     uint8_t *pci_conf = pdev->config;
 
     pci_config_set_interrupt_pin(pci_conf, 1); // 注册中断 使用INTx的引脚1
