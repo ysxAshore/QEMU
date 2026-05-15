@@ -266,6 +266,8 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
         hwgc->cpu = current_cpu;
         hwgc->state = STEP_PAR_ALLOCATE;
 
+        flush_hwgc_tlb(hwgc);
+
         qatomic_or(&hwgc->status, HWGC_STATUS_COMPUTING);
         qemu_cond_signal(&hwgc->thr_cond);
     }
