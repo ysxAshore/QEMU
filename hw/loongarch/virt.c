@@ -268,19 +268,6 @@ static DeviceState *create_acpi_ged(DeviceState *pch_pic,
     return dev;
 }
 
-static DeviceState *create_test_device(DeviceState *pch_pic)
-{
-    DeviceState *dev;
-
-    dev = qdev_new("test");
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-
-    /* 将设备的第0个MMIO区域 映射到 物理地址 */
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, VIRT_TEST_DEVICE_BASE);
-
-    return dev;
-}
-
 static DeviceState *create_platform_bus(DeviceState *pch_pic)
 {
     DeviceState *dev;
@@ -379,8 +366,6 @@ static void virt_devices_init(DeviceState *pch_pic,
     sysbus_create_simple("ls7a_rtc", VIRT_RTC_REG_BASE,
                          qdev_get_gpio_in(pch_pic,
                                           VIRT_RTC_IRQ - VIRT_GSI_BASE));
-
-    // create_test_device(pch_pic);
 
     /* acpi ged */
     lvms->acpi_ged = create_acpi_ged(pch_pic, lvms);

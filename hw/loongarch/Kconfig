@@ -26,3 +26,4 @@ config LOONGARCH_VIRT
     select PFLASH_CFI01
     select ACPI_HMAT
 	select HWGC
+	select MY_TEST_DEVICE

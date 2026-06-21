@@ -46,10 +46,42 @@ My Quick Guider
 Build LoongArch QEMU
 
 .. code-block:: shell
+   # install ninja and so on
+   sudo apt update
+   sudo apt install -y \
+       ninja-build \
+       pkg-config \
+       python3-pip \
+       python3-venv \
+       libglib2.0-dev \
+       libpixman-1-dev \
+       zlib1g-dev \
+   
+   # instal network-tools
+   sudo apt install -y libslirp-dev libslirp0
+   sudo apt-get install uml-utilities bridge-utils
+   
+   # install gui-tools
+   sudo apt install libgtk-3-dev
+   
+   # 创建并激活虚拟环境
+   python -m venv .venv
+   source .venv/bin/activate  # Linux/macOS
+   
+   # 使用USTC PIP镜像
+   cat > $VIRTUAL_ENV/pip.conf <<EOF
+   [global]
+   index-url = https://mirrors.ustc.edu.cn/pypi/simple/
+   trusted-host = mirrors.ustc.edu.cn
+   EOF
+   
+   # 安装依赖
+   pip install -r requirements.txt
 
+   # 构建
    mkdir build4la
    cd build4la
-   ../configure --target-list=loongarch64-softmmu --enable-kvm --disable-werror --enable-vnc --enable-virtfs --enable-slirp
+   PKG_CONFIG=/usr/bin/pkg-config ../configure --target-list=loongarch64-softmmu --enable-kvm --disable-werror --enable-vnc --enable-virtfs --enable-slirp
    make -j 8
 
 Building

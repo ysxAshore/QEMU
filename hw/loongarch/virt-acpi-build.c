@@ -450,28 +450,6 @@ static void build_flash_aml(Aml *scope, LoongArchVirtMachineState *lvms)
     aml_append(scope, dev);
 }
 
-static void build_test_device_aml(Aml *scope)
-{
-    // 参考 flash 的 aml 设计
-    //
-    Aml *dev;
-    Aml *crs;
-    uint64_t base = VIRT_TEST_DEVICE_BASE;
-    uint64_t size = VIRT_TEST_DEVICE_LEN;
-
-    dev = aml_device("_TD0"); // length <= 4
-    aml_append(dev, aml_name_decl("_HID", aml_string("TESTDEV0")));
-    aml_append(dev, aml_name_decl("_UID", aml_int(0)));
-
-    crs = aml_resource_template();
-    // 地址解析方式 最小地址固定 最大地址固定 非缓存 可读可写 地址对齐粒度通常为0 起始地址 结束地址 转换偏移通常为0 大小
-    aml_append(crs, aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED, AML_MAX_FIXED,
-                                     AML_NON_CACHEABLE, AML_READ_WRITE,
-                                     0, base, base + size - 1, 0, size));
-    aml_append(dev, aml_name_decl("_CRS", crs));
-    aml_append(scope, dev);
-}
-
 #ifdef CONFIG_TPM
 static void acpi_dsdt_add_tpm(Aml *scope, LoongArchVirtMachineState *vms)
 {
@@ -526,7 +504,6 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     build_pci_device_aml(dsdt, lvms);
     build_la_ged_aml(dsdt, machine);
     build_flash_aml(dsdt, lvms);
-    // build_test_device_aml(dsdt);
 #ifdef CONFIG_TPM
     acpi_dsdt_add_tpm(dsdt, lvms);
 #endif
