@@ -105,22 +105,26 @@ enum HWGCStage
 {
     STAGE_IDLE = 0,
     STAGE_FETCH = 1,
-    STAGE_ARRAY_PROCESS = 2,
-    STAGE_OOP_PROCESS = 3,
+    STAGE_PARTIAL_ARRAY = 2,
+    STAGE_COMMON_OOP = 3,
     STAGE_COPY2SURVIVOR = 4,
-    STAGE_TRACE = 5,
-    STAGE_ALLOCATE = 6,
-    STAGE_PAR_ALLOCATE_DURING_GC = 7,
-    STAGE_ATTEMPT_ALLOC = 8,
-    STAGE_NEW_GC_ALLOC = 9,
-    STAGE_ALLOCATE_FREE = 10,
-    STAGE_PAR_ALLOCATE = 11,
-    STAGE_PAR_ALLOCATE_IML = 12,
-    STAGE_DO_OOP_WORK = 13,
-    STAGE_AOP_WORK = 14,
-    STAGE_NODE_ALLOCATE = 15,
-    STAGE_DONE = 16
-}
+    STAGE_ALLOC = 5,
+    STAGE_ALLOCATE_DIRECT = 6,
+    STAGE_ALLOCATE_DURING_GC = 7,
+    STAGE_PAR_ALLOCATE_IML = 8,
+    STAGE_PAR_ALLOCATE = 9,
+    STAGE_COPY = 10,
+    STAGE_TRACE = 11,
+    STAGE_TRACE_PLUS = 12,
+    STAGE_TRACE_DEC = 13,
+    STAGE_DO_OOP_WORK = 14,
+    STAGE_AOP_WORK = 15,
+    STAGE_DONE = 16,
+
+    STAGE_ATTEMPT_ALLOC = 17,
+    STAGE_NEW_GC_ALLOC = 18,
+    STAGE_ALLOCATE_FREE = 19
+};
 
 struct HWGCParameters
 {
@@ -157,58 +161,182 @@ struct HWGCParameters
 
 struct HWGCStageData
 {
-    uint64_t miss_va;
-    uint32_t miss_access;
-    uint64_t fill_va;
-    hwaddr fill_pa;
-
     struct HWGCParameters pars;
 
+    uintptr_t previous;
+    int previous_sub_stage;
+
+    uintptr_t done_to;
+    int doneto_sub_stage;
+
     uintptr_t task;
+    uint32_t localBot;
+
     uintptr_t from_obj;
     uintptr_t to_obj;
-
     uintptr_t partial_m_value;
-    uint partial_from_length;
-    uint partial_to_length;
-    uintptr_t heap_region;
-    uint heap_region_type;
+    int partial_from_length;
+    int start;
 
-    bool isArray;
-    uint stepIndex;
-    uint stepNcreate;
-    uint arrayLength;
-    uint partial_start;
+    uintptr_t heap_region;
+    uint32_t heap_region_type;
+    uint32_t ncreate;
+    uint32_t i;
     bool scanning_in_young;
 
-    uintptr_t offset;
+    uintptr_t p;
+    uintptr_t q;
+    uintptr_t src;
+    uintptr_t dest;
+
+    uint32_t array_localBot;
+
     uintptr_t common_m_value;
     uintptr_t src_region_attr_ptr;
     uint16_t src_region_attr;
+    uintptr_t originValue;
+    uintptr_t offset;
+    uint16_t region_attr;
+    uintptr_t region_attr_ptr;
 
     uintptr_t klass_ptr;
-    uint lh, kid, size, age;
-    bool dest_attr_valid;
-    uint dest_attr_cache;
-    int8_t src_region_attr_type;
+    size_t size;
+    int lh;
+    int kid;
+    int common_oop_array_length;
+
+    uint16_t copy2survivor_region_attr;
+    uint16_t age;
+    uint32_t dest_attr_cache;
     uint16_t dest_attr;
+
     uintptr_t dest_attr_ptr;
     uintptr_t monitor_markWord;
-    int plab_idx;
-    uintptr_t buffer_ptr[2];
-    uintptr_t buffer[2];
-    uintptr_t plab_top[2];
-    uintptr_t plab_end[2];
-    bool plab_buffer_valid[2];
-    bool plab_top_end_valid[2];
-    uintptr_t obj_ptr, forward_ptr;
-    uintptr_t writeSrcMW;
-    uintptr_t region_bottom, region_hard_end;
-    uint idx;
+    uintptr_t from_region;
 
+    uintptr_t buffer_temp;
+    uintptr_t buffer;
+    uintptr_t region_top;
+    uintptr_t region_end;
+    uintptr_t region_bottom;
+    uintptr_t region_hard_end;
+
+    uintptr_t new_mark;
+    uintptr_t writeSrcMW;
+    uintptr_t forward_ptr;
+
+    int8_t dest_attr_type;
+
+    uintptr_t plab_stats_ptr;
+    uintptr_t allocator_ptr;
+    uintptr_t alloc_klass_ptr;
+
+    size_t plab_word_size;
+    size_t required_in_plab;
+    size_t actual_plab_size;
+    size_t min_word_size;
+    size_t desired_word_size;
+    int during_gc_select;
+    bool plab_refill_failed;
+
+    uintptr_t region_ptr;
+    uintptr_t alloc_region;
+
+    uintptr_t card_table_ptr;
+    uintptr_t byte_map_base;
+    uintptr_t first;
+    uintptr_t last;
+
+    uintptr_t remaining;
+    uint buf[256];
+    uintptr_t offset30;
+    uintptr_t offset38;
+
+    int par_alloc_iml_sel;
+    int par_alloc_sel;
+    bool bot_updates;
+
+    uintptr_t alloc_top;
+    uintptr_t alloc_end;
+    size_t want_to_allocate;
+
+    uintptr_t blk_start;
+    uintptr_t blk_end;
+    uintptr_t bot_part_ptr;
+    uintptr_t bot_ptr;
+    uintptr_t next_offset_threshold;
+    uintptr_t array;
+    uintptr_t reserved_start;
+    uintptr_t begin;
+
+    size_t index;
+    size_t start_card_for_region;
+    size_t start_card;
+    size_t end_card;
+    size_t reach;
+    size_t num_cards;
+    uint8_t ct_offset;
+
+    size_t allocated_bytes;
+    int8_t type;
+    uintptr_t new_alloc_region;
+    uintptr_t cm;
+    uintptr_t root_regions_array;
+    uintptr_t mem_region;
+    uintptr_t next_top;
+
+    uint32_t region_node_index;
+    uint32_t array_len;
+    uint32_t array_max;
+
+    uintptr_t policy_ptr;
+    uintptr_t grow_array_ptr;
+    uintptr_t data_ptr;
+    uintptr_t count_per_node;
+    uintptr_t numa;
+
+    bool expand_failure;
+    bool allocate_free_sel;
+
+    bool from_head;
+    uint32_t active_node_ids;
+    uint32_t region_size;
+    uint32_t page_size;
+    uint32_t cur_depth;
+    uint32_t max_depth;
+
+    uintptr_t free_list_ptr;
+    uintptr_t cur;
+    uintptr_t prev;
+    uintptr_t next;
+
+    uintptr_t data;
+
+    int end;
+    int vtable_len;
+    int staticCount;
+
+    uintptr_t start_map;
+    uintptr_t end_map;
+
+    uintptr_t heap_oop;
+    uint32_t region;
+    bool bool_base_value;
+
+    uintptr_t byte_map;
+    uintptr_t res;
+    size_t card_index;
+    size_t last_index;
+
+    uintptr_t node_allocator_ptr;
+    uintptr_t node;
+    uintptr_t old_node;
+    uintptr_t new_top;
+
+    uint16_t aop_region_attr;
     uintptr_t aop_region_attr_ptr;
-    uintptr_t aop_p;
-}
+    uintptr_t aop_dest;
+};
 
 struct HWGCDevState
 {
@@ -230,6 +358,11 @@ struct HWGCDevState
     uint32_t irq_status;
     enum HWGCStage stage;
     int sub_stage;
+
+    uint64_t irq_par0;
+    uint64_t irq_par1;
+    uint64_t irq_res0;
+    uint64_t irq_res1;
 
     struct HWGCStageData stageData;
 

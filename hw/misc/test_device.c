@@ -502,15 +502,6 @@ static uint64_t xor_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case REG_PERIOD_NS:
         ret = s->period_ns;
         break;
-    case REG_DEBUG_A:
-        ret = s->a_val;
-        break;
-    case REG_DEBUG_B:
-        ret = s->b_val;
-        break;
-    case REG_DEBUG_RES:
-        ret = s->result;
-        break;
     case REG_STAGE:
         ret = s->stage;
         break;
