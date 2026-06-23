@@ -233,14 +233,10 @@ static void xor_arm_timer(XorTLBDevState *s)
 
 static void xor_pause_for_tlb_miss(XorTLBDevState *s, uint64_t va, uint32_t access)
 {
-    qemu_mutex_lock(&s->lock);
-
     s->miss_va = va;
     s->miss_access = access;
     s->timer_running = false;
     qatomic_or(&s->status, ST_WAIT_TLB);
-
-    qemu_mutex_unlock(&s->lock);
 
     xor_raise_irq_from_worker(s, IRQ_TLB_MISS);
 }
@@ -254,9 +250,7 @@ static bool xor_translate(XorTLBDevState *s, uint64_t va, uint32_t access, hwadd
 {
     bool hit;
 
-    qemu_mutex_lock(&s->lock);
     hit = xor_tlb_lookup_locked(s, va, pa);
-    qemu_mutex_unlock(&s->lock);
 
     if (!hit)
     {
@@ -277,10 +271,8 @@ static bool xor_access_u64(XorTLBDevState *s, uint64_t va, uint64_t *val, bool w
     if ((va & 7) != 0 || ((va & (XOR_PAGE_SIZE - 1)) > XOR_PAGE_SIZE - sizeof(uint64_t)))
     {
         printf("va address error\n");
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
         xor_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
     }
@@ -298,10 +290,8 @@ static bool xor_access_u64(XorTLBDevState *s, uint64_t va, uint64_t *val, bool w
     if (tx != MEMTX_OK)
     {
         printf("memory access error\n");
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
         xor_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
     }
@@ -335,44 +325,51 @@ static void xor_step_one_effective_cycle(XorTLBDevState *s)
     {
     case STAGE_FETCH:
         // Effective cycle 1: read a and b. If either VA misses, this cycle stalls.
-        if (!xor_access_u64(s, a_va, &a, false))
-            return;
-        if (!xor_access_u64(s, b_va, &b, false))
-            return;
-
         qemu_mutex_lock(&s->lock);
-        s->a_val = a;
-        s->b_val = b;
+        if (!xor_access_u64(s, a_va, &s->a_val, false))
+        {
+            qemu_mutex_unlock(&s->lock);
+            xor_arm_timer(s);
+            return;
+        }
+        if (!xor_access_u64(s, b_va, &s->b_val, false))
+        {
+            qemu_mutex_unlock(&s->lock);
+            xor_arm_timer(s);
+            return;
+        }
+
         s->stage = STAGE_EXEC;
-        qemu_mutex_unlock(&s->lock);
-        printf("a %lx b %lx\n", a, b);
         xor_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
+        printf("a %lx b %lx\n", s->a_val, s->b_val);
         break;
 
     case STAGE_EXEC:
         // Effective cycle 2:   calculate a ^ b.
-        r = a ^ b;
         qemu_mutex_lock(&s->lock);
-        s->result = r;
+        s->result = s->a_val ^ s->b_val;
         s->stage = STAGE_WRITEBACK;
+        xor_arm_timer(s); // 过period_ns后,timer callback 唤醒 worker
         qemu_mutex_unlock(&s->lock);
         printf("result %lx\n", r);
-        xor_arm_timer(s); // 过period_ns后,timer callback 唤醒 worker
         break;
 
     case STAGE_WRITEBACK:
         // Effective cycle 3:   write result. If out VA misses, this cycle stalls.
-        if (!xor_access_u64(s, out_va, &r, true))
-            return;
-
         qemu_mutex_lock(&s->lock);
+        if (!xor_access_u64(s, out_va, &r, true))
+        {
+            qemu_mutex_unlock(&s->lock);
+            return;
+        }
         s->stage = STAGE_DONE;
         s->timer_running = false;
         qatomic_and(&s->status, ~ST_BUSY);
         qatomic_or(&s->status, ST_DONE);
-        qemu_mutex_unlock(&s->lock);
 
         xor_raise_irq_from_worker(s, IRQ_DONE);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     default:

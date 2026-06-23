@@ -131,8 +131,8 @@ struct HWGCParameters
     uint32_t chunkSize;
     uint32_t ageThreshold;
     uint32_t heapRegionBias;
-    uint32_t regionAttrShiftBy;
     uint32_t heapRegionShiftBy;
+    uint32_t regionAttrShiftBy;
     uint32_t logOfHRGrainBytes;
     uint64_t stepperOffset;
     uint64_t youngWordsBase;
@@ -358,6 +358,7 @@ struct HWGCDevState
     uint32_t irq_status;
     enum HWGCStage stage;
     int sub_stage;
+    uint32_t irq_source;
 
     uint64_t irq_par0;
     uint64_t irq_par1;

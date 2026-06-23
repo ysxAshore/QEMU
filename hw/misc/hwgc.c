@@ -18,7 +18,7 @@ static void hwgc_tlb_insert_locked(HWGCDevState *s, uint64_t va, hwaddr pa)
     s->tlb[idx].va_page = va_page;
     s->tlb[idx].pa_page = pa_page;
 
-    printf("[xor] TLB insert: idx=%u va_page=0x%016" PRIx64
+    printf("[hwgc] TLB insert: idx=%u va_page=0x%016" PRIx64
            " pa_page=0x%016" HWADDR_PRIx "\n",
            idx, va_page, pa_page);
 }
@@ -78,14 +78,10 @@ static void hwgc_arm_timer(HWGCDevState *s)
 
 static void hwgc_pause_for_tlb_miss(HWGCDevState *s, uint64_t va, uint32_t access)
 {
-    qemu_mutex_lock(&s->lock);
-
     s->irq_par0 = va;
     s->irq_par1 = access;
     s->timer_running = false;
     qatomic_or(&s->status, ST_WAIT_TLB);
-
-    qemu_mutex_unlock(&s->lock);
 
     hwgc_raise_irq_from_worker(s, IRQ_TLB_MISS);
 }
@@ -99,9 +95,7 @@ static bool hwgc_translate(HWGCDevState *s, uint64_t va, uint32_t access, hwaddr
 {
     bool hit;
 
-    qemu_mutex_lock(&s->lock);
     hit = hwgc_tlb_lookup_locked(s, va, pa);
-    qemu_mutex_unlock(&s->lock);
 
     if (!hit)
     {
@@ -124,10 +118,8 @@ static bool hwgc_access(HWGCDevState *s, uint64_t va, void *val, uint size, bool
     if ((va & align) != 0 || ((va & (HWGC_PAGE_SIZE - 1)) > HWGC_PAGE_SIZE - size))
     {
         printf("va address error\n");
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
         hwgc_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
     }
@@ -145,10 +137,8 @@ static bool hwgc_access(HWGCDevState *s, uint64_t va, void *val, uint size, bool
     if (tx != MEMTX_OK)
     {
         printf("memory access error\n");
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
         hwgc_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
     }
@@ -162,10 +152,8 @@ static bool hwgc_cmpxchg(HWGCDevState *s, uintptr_t vaddr, uint64_t old_val, uin
     if ((vaddr & 7) != 0 || ((vaddr & (HWGC_PAGE_SIZE - 1)) > HWGC_PAGE_SIZE - sizeof(uint64_t)))
     {
         printf("va address error\n");
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
         hwgc_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
     }
@@ -183,10 +171,8 @@ static bool hwgc_cmpxchg(HWGCDevState *s, uintptr_t vaddr, uint64_t old_val, uin
     {
         printf("memory region not is ram\n");
 
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
 
         hwgc_raise_irq_from_worker(s, IRQ_ERROR);
 
@@ -214,10 +200,8 @@ static bool hwgc_cmpxchg(HWGCDevState *s, uintptr_t vaddr, uint64_t old_val, uin
     {
         printf("not supported size\n");
 
-        qemu_mutex_lock(&s->lock);
         qatomic_or(&s->status, ST_ERROR);
         s->timer_running = false;
-        qemu_mutex_unlock(&s->lock);
 
         hwgc_raise_irq_from_worker(s, IRQ_ERROR);
         return false;
@@ -861,10 +845,8 @@ static void stage_allocate_direct_function(HWGCDevState *s)
     switch (s->sub_stage)
     {
     case 0:
-        uintptr_t plab_stats_ptr;
-        if (dest_attr_type == 0)
-            plab_stats_ptr = d->pars.g1h + 0x250;
-        else if (d->dest_attr_type == 1)
+        uintptr_t plab_stats_ptr = d->pars.g1h + 0x250;
+        if (d->dest_attr_type == 1)
             plab_stats_ptr = d->pars.g1h + 0x2e0;
 
         if (!hwgc_access(s, plab_stats_ptr + 0x30, &d->region_attr_ptr, 8, false))
@@ -1081,7 +1063,11 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
         if (get > 1)
         {
-            // wake_irq
+            s->irq_par0 = lock_ptr;
+            s->timer_running = false;
+            qatomic_or(&s->status, ST_WAIT_WAKE);
+
+            hwgc_raise_irq_from_worker(s, IRQ_WAKE);
         }
         else
             s->sub_stage = 4;
@@ -1098,6 +1084,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
         }
         else
             s->sub_stage = 5;
+        break;
 
     case 5:
         hwgc_goto_stage(s, STAGE_ALLOCATE_DIRECT, d->during_gc_select ? 8 : 6);
@@ -1144,7 +1131,11 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
         if (get > 1)
         {
-            // wake_irq
+            s->irq_par0 = lock_ptr;
+            s->timer_running = false;
+            qatomic_or(&s->status, ST_WAIT_WAKE);
+
+            hwgc_raise_irq_from_worker(s, IRQ_WAKE);
         }
         else
             s->sub_stage = 8;
@@ -1165,6 +1156,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
         }
         else
             s->sub_stage = 5;
+        break;
 
     case 9:
         if (!hwgc_access(s, d->pars.lockPtr, &d->pars.thread, 8, true))
@@ -1186,7 +1178,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
         break;
 
     case 11:
-        lock_ptr = d->pars.lockPtr + 0x8;
+        lock_ptr = d->pars.lockPtr;
         expected = 1;
         writed = 0;
         if (!hwgc_cmpxchg(s, lock_ptr + 8, expected, writed, 4, &get))
@@ -1194,7 +1186,11 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
         if (get > 1)
         {
-            // wake irq
+            s->irq_par0 = lock_ptr;
+            s->timer_running = false;
+            qatomic_or(&s->status, ST_WAIT_WAKE);
+
+            hwgc_raise_irq_from_worker(s, IRQ_WAKE);
         }
         else
             s->sub_stage = 5;
@@ -1882,32 +1878,24 @@ static void stage_aop_work_function(HWGCDevState *s)
     case 5:
         if (d->old_node == 0)
         {
-            //++enqueued_irq;
+            s->irq_par0 = d->node_allocator_ptr;
+            s->timer_running = false;
+            qatomic_or(&s->status, ST_WAIT_ALLOCATE);
 
-            // d->softPars.par0 = d->node_allocator_ptr;
-
-            // s->wake_stage = STAGE_AOP_WORK;
-            // s->wake_sub_stage = 10;
-
-            // hwgc_goto_stage(s, STAGE_DEBUG, 0);
-
-            // if (qatomic_read(&s->status) & HWGC_STATUS_IRQ)
-            //{
-            //     bql_lock();
-            //     hwgc_raise_irq(s, ENQUEUE_FAILED_IRQ);
-            //     bql_unlock();
-            // }
+            hwgc_raise_irq_from_worker(s, IRQ_ALLOCATE);
 
             return;
         }
         else
             s->sub_stage = 6;
+        break;
 
     case 6:
         d->buffer = d->node + 0x10;
         if (!hwgc_access(s, d->node_allocator_ptr, &d->index, 8, false))
             return;
         s->sub_stage = 7;
+        break;
 
     case 7:
         int idx = d->index / 8 - 1;
@@ -1936,39 +1924,66 @@ static void do_hwgc_work(void *opaque)
     switch (s->stage)
     {
     case STAGE_FETCH:
+        qemu_mutex_lock(&s->lock);
         stage_fetch_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_PARTIAL_ARRAY:
+        qemu_mutex_lock(&s->lock);
         stage_partial_array_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_COMMON_OOP:
+        qemu_mutex_lock(&s->lock);
         stage_oop_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_COPY2SURVIVOR:
+        qemu_mutex_lock(&s->lock);
         stage_copy2survivor_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_ALLOC:
+        qemu_mutex_lock(&s->lock);
         stage_alloc_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_ALLOCATE_DIRECT:
+        qemu_mutex_lock(&s->lock);
         stage_allocate_direct_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_ALLOCATE_DURING_GC:
+        qemu_mutex_lock(&s->lock);
         stage_allocate_during_gc_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_PAR_ALLOCATE_IML:
+        qemu_mutex_lock(&s->lock);
         stage_par_allocate_iml_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_PAR_ALLOCATE:
+        qemu_mutex_lock(&s->lock);
         stage_par_allocate_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
         //    case STAGE_ATTEMPT_ALLOC:
@@ -1984,27 +1999,45 @@ static void do_hwgc_work(void *opaque)
         //        break;
 
     case STAGE_COPY:
+        qemu_mutex_lock(&s->lock);
         stage_copy_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_TRACE:
+        qemu_mutex_lock(&s->lock);
         stage_trace_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_TRACE_PLUS:
+        qemu_mutex_lock(&s->lock);
         stage_trace_plus_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_TRACE_DEC:
+        qemu_mutex_lock(&s->lock);
         stage_trace_dec_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_DO_OOP_WORK:
+        qemu_mutex_lock(&s->lock);
         stage_do_oop_work_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_AOP_WORK:
+        qemu_mutex_lock(&s->lock);
         stage_aop_work_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
         break;
 
     case STAGE_DONE:
@@ -2012,3 +2045,378 @@ static void do_hwgc_work(void *opaque)
         break;
     }
 }
+
+static void hwgc_tick_timer_cb(void *opaque)
+{
+    HWGCDevState *s = opaque;
+
+    qemu_mutex_lock(&s->lock);
+
+    // tick_pending表示有一次的tick需要处理
+    if (!s->thread_stop && s->timer_running)
+    {
+        s->tick_pending = true;
+        qemu_cond_signal(&s->cond);
+    }
+
+    qemu_mutex_unlock(&s->lock);
+}
+
+static void *hwgc_worker_thread(void *opaque)
+{
+    HWGCDevState *s = opaque;
+
+    while (true)
+    {
+        qemu_mutex_lock(&s->lock);
+
+        while (!s->thread_stop && !s->tick_pending)
+            qemu_cond_wait(&s->cond, &s->lock);
+
+        if (s->thread_stop)
+        {
+            qemu_mutex_unlock(&s->lock);
+            break;
+        }
+
+        // 消费掉这一次的tick 执行一个设备周期
+        s->tick_pending = false;
+        qemu_mutex_unlock(&s->lock);
+
+        do_hwgc_work(s);
+    }
+
+    return NULL;
+}
+
+static void hwgc_reset_device_locked(HWGCDevState *s)
+{
+    s->timer_running = false;
+    s->tick_pending = false;
+
+    qatomic_set(&s->status, qatomic_read(&s->status) & ST_IRQ_EN);
+    qatomic_set(&s->irq_status, 0);
+
+    s->stage = STAGE_IDLE;
+    s->sub_stage = 0;
+
+    memset(&s->stageData, 0, sizeof(struct HWGCStageData));
+    s->irq_par0 = 0;
+    s->irq_par1 = 0;
+    s->irq_res0 = 0;
+    s->irq_res1 = 0;
+
+    hwgc_tlb_flush(s);
+}
+
+static void hwgc_start_locked(HWGCDevState *s)
+{
+    if (qatomic_read(&s->status) & ST_BUSY)
+        return;
+
+    qatomic_and(&s->status, ST_IRQ_EN);
+    qatomic_or(&s->status, ST_BUSY);
+
+    qatomic_set(&s->irq_status, 0);
+
+    s->stage = STAGE_FETCH;
+    s->sub_stage = 0;
+
+    s->stageData.localBot = s->stageData.pars.localBot;
+
+    hwgc_tlb_flush(s);
+
+    s->timer_running = true;
+    s->tick_pending = false;
+    hwgc_arm_timer(s);
+}
+
+static uint64_t hwgc_mmio_read(void *opaque, hwaddr addr, unsigned size)
+{
+    HWGCDevState *s = opaque;
+    uint64_t ret = ~0ULL;
+
+    qemu_mutex_lock(&s->lock);
+
+    switch (addr)
+    {
+    case REG_STATUS:
+        ret = qatomic_read(&s->status);
+        break;
+    case REG_IRQ_STATUS:
+        ret = qatomic_read(&s->irq_status);
+        break;
+    case REG_IRQ_PAR0:
+        ret = s->irq_par0;
+        break;
+    case REG_IRQ_PAR1:
+        ret = s->irq_par1;
+        break;
+    default:
+        printf("[hwgc] unknown MMIO read: addr=0x%" HWADDR_PRIx
+               ", size=%u\n",
+               addr, size);
+        ret = ~0ULL;
+        break;
+    }
+
+    printf("[hwgc] MMIO read: addr=0x%" HWADDR_PRIx
+           ", size=%u, value=0x%016" PRIx64 "\n",
+           addr, size, ret);
+
+    qemu_mutex_unlock(&s->lock);
+    return ret;
+}
+
+static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+{
+    HWGCDevState *s = opaque;
+    bool do_continue = false;
+
+    printf("[hwgc] MMIO write: addr=0x%" HWADDR_PRIx
+           ", size=%u, value=0x%016" PRIx64 "\n",
+           addr, size, val);
+
+    if (addr == REG_IRQ_CLEAR && size == 4)
+    {
+        printf("[hwgc] IRQ clear: value=0x%08" PRIx64 "\n",
+               val & UINT64_C(0xffffffff));
+
+        hwgc_lower_irq_from_mmio(s, val);
+        return;
+    }
+
+    qemu_mutex_lock(&s->lock);
+
+    switch (addr)
+    {
+    case REG_STATUS:
+        if (size == 4)
+        {
+            if (val & ST_IRQ_EN)
+            {
+                printf("[hwgc] enable IRQ\n");
+                qatomic_or(&s->status, ST_IRQ_EN);
+            }
+            else
+            {
+                printf("[hwgc] disable IRQ\n");
+                qatomic_and(&s->status, ~ST_IRQ_EN);
+            }
+        }
+        else
+        {
+            printf("[hwgc] invalid STATUS size: %u\n", size);
+        }
+        break;
+
+    case REG_CMD:
+        if (size == 4)
+        {
+            if (val & CMD_RESET)
+            {
+                printf("[hwgc] CMD_RESET\n");
+                hwgc_reset_device_locked(s);
+            }
+
+            if (val & CMD_START)
+                hwgc_start_locked(s);
+
+            if (val & CMD_CONTINUE)
+            {
+                if (s->status & ST_WAIT_TLB)
+                {
+                    hwgc_tlb_insert_locked(s, s->irq_res0, s->irq_res1);
+                    qatomic_and(&s->status, ~ST_WAIT_TLB);
+                }
+                else if (s->status & ST_WAIT_ALLOCATE)
+                {
+                    s->stageData.node = s->irq_res0;
+                    s->sub_stage++;
+                    qatomic_and(&s->status, ~ST_WAIT_ALLOCATE);
+                }
+                else if (s->status & ST_WAIT_WAKE)
+                {
+                    s->sub_stage++;
+                    qatomic_and(&s->status, ~ST_WAIT_WAKE);
+                }
+
+                s->timer_running = true;
+                s->tick_pending = false;
+                do_continue = true;
+            }
+        }
+        else
+        {
+            printf("[hwgc] invalid CMD size: %u\n", size);
+        }
+        break;
+
+    case REG_IRQ_RES0:
+        if (size == 8)
+            s->irq_res0 = val;
+        break;
+
+    case REG_IRQ_RES1:
+        if (size == 8)
+            s->irq_res1 = val;
+        break;
+    }
+
+    if (addr >= REG_PAR0 && addr <= REG_PAR21)
+    {
+        static const size_t par_offsets[] = {
+            offsetof(struct HWGCParameters, chunkSize),                        // REG_PAR0: lo=chunkSize, hi=ageThreshold
+            offsetof(struct HWGCParameters, heapRegionBias),                   // REG_PAR1: lo=heapRegionBias, hi=heapRegionShiftBy
+            offsetof(struct HWGCParameters, regionAttrShiftBy),                // REG_PAR2: lo=regionAttrShiftBy, hi=logOfHRGrainBytes
+            offsetof(struct HWGCParameters, stepperOffset),                    // REG_PAR3
+            offsetof(struct HWGCParameters, youngWordsBase),                   // REG_PAR4
+            offsetof(struct HWGCParameters, regionAttrBase),                   // REG_PAR5
+            offsetof(struct HWGCParameters, plabAllocatorPtr),                 // REG_PAR6
+            offsetof(struct HWGCParameters, regionAttrBiasedBase),             // REG_PAR7
+            offsetof(struct HWGCParameters, heapRegionBiasedBase),             // REG_PAR8
+            offsetof(struct HWGCParameters, pss),                              // REG_PAR9
+            offsetof(struct HWGCParameters, localBot),                         // REG_PAR10: lo=locabot, hi=cimpressedFlags
+            offsetof(struct HWGCParameters, taskQueueElemsBase),               // REG_PAR11
+            offsetof(struct HWGCParameters, humogousReclaimCandidateBoolBase), // REG_PAR12
+            offsetof(struct HWGCParameters, cardTablePtr),                     // REG_PAR13
+            offsetof(struct HWGCParameters, g1h),                              // REG_PAR14
+            offsetof(struct HWGCParameters, intArrayKlassObj),                 // REG_PAR15
+            offsetof(struct HWGCParameters, objectKlass),                      // REG_PAR16
+            offsetof(struct HWGCParameters, lockPtr),                          // REG_PAR17
+            offsetof(struct HWGCParameters, thread),                           // REG_PAR18
+            offsetof(struct HWGCParameters, dummyRegion),                      // REG_PAR19
+            offsetof(struct HWGCParameters, compressedOopBase),                // REG_PAR20
+            offsetof(struct HWGCParameters, compressedKlassPointerBase),       // REG_PAR21
+
+        };
+        int idx = (addr - REG_PAR0) / 8;
+        uint8_t *base = (uint8_t *)&s->stageData.pars;
+        if (idx <= 2)
+        {
+            uint32_t *lo = (uint32_t *)(base + par_offsets[idx]);
+            uint32_t *hi = lo + 1;
+            *lo = (uint32_t)val;
+            *hi = (uint32_t)(val >> 32);
+        }
+        else if (idx == 10)
+        {
+            s->stageData.pars.localBot = (uint32_t)val;
+            s->stageData.pars.useCompressedOops = (uint8_t)(val >> 32);
+            s->stageData.pars.compressedOopShift = (uint8_t)(val >> 40);
+            s->stageData.pars.useCompressedKlassPointers = (uint8_t)(val >> 48);
+            s->stageData.pars.compressedKlassPointerShift = (uint8_t)(val >> 56);
+        }
+        else
+            *(uint64_t *)(base + par_offsets[idx]) = val;
+    }
+
+    qemu_mutex_unlock(&s->lock);
+
+    if (do_continue)
+    {
+        printf("[hwgc] arm timer, period=%" PRIu64 " ns\n",
+               s->period_ns);
+        hwgc_arm_timer(s);
+    }
+}
+
+static const MemoryRegionOps hwgc_mmio_ops = {
+    .read = hwgc_mmio_read,
+    .write = hwgc_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+};
+
+static void hwgc_realize(PCIDevice *pdev, Error **errp)
+{
+    HWGCDevState *s = HWGC_DEV(pdev);
+    uint8_t *pci_conf = pdev->config;
+
+    pci_config_set_interrupt_pin(pci_conf, 1);
+
+    if (msi_init(pdev, 0, 1, true, false, errp))
+        return;
+
+    qemu_mutex_init(&s->lock);
+    qemu_cond_init(&s->cond);
+
+    s->period_ns = 1000000; /* default: 1 ms per simulated hardware cycle */
+    s->thread_stop = false;
+    s->timer_running = false;
+    s->tick_pending = false;
+    s->stage = STAGE_IDLE;
+    hwgc_tlb_flush(s);
+
+    s->tick_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, hwgc_tick_timer_cb, s);
+
+    qemu_thread_create(&s->worker, "hwgc", hwgc_worker_thread, s, QEMU_THREAD_JOINABLE);
+    memory_region_init_io(&s->mmio, OBJECT(s), &hwgc_mmio_ops, s, "hwgc-mmio", 4 * KiB);
+    pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mmio);
+}
+
+static void hwgc_exit(PCIDevice *pdev)
+{
+    HWGCDevState *s = HWGC_DEV(pdev);
+
+    qemu_mutex_lock(&s->lock);
+    s->thread_stop = true;
+    s->timer_running = false;
+    s->tick_pending = true;
+    qemu_cond_signal(&s->cond);
+    qemu_mutex_unlock(&s->lock);
+
+    if (s->tick_timer)
+    {
+        timer_del(s->tick_timer);
+        timer_free(s->tick_timer);
+        s->tick_timer = NULL;
+    }
+
+    qemu_thread_join(&s->worker);
+
+    qemu_cond_destroy(&s->cond);
+    qemu_mutex_destroy(&s->lock);
+
+    msi_uninit(pdev);
+}
+
+static void hwgc_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+
+    k->realize = hwgc_realize;
+    k->exit = hwgc_exit;
+    k->vendor_id = HWGC_VENDOR_ID;
+    k->device_id = HWGC_DEVICE_ID;
+    k->revision = 0x01;
+    k->class_id = PCI_CLASS_OTHERS;
+
+    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+}
+
+static const TypeInfo hwgc_info = {
+    .name = TYPE_HWGC_DEV,
+    .parent = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(HWGCDevState),
+    .class_init = hwgc_class_init,
+    .interfaces = (const InterfaceInfo[]){
+        {INTERFACE_CONVENTIONAL_PCI_DEVICE},
+        {},
+    },
+};
+
+static void hwgc_register_types(void)
+{
+    type_register_static(&hwgc_info);
+}
+
+type_init(hwgc_register_types)
