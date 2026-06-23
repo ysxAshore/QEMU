@@ -8,6 +8,14 @@
 #include "hw/pci/msi.h"
 #include "system/address-spaces.h"
 
+#define TRACE 1
+#define IFDEF(cond, stmt) \
+    if (cond)             \
+        do                \
+        {                 \
+            stmt;         \
+        } while (0);
+
 #define TYPE_HWGC_DEV "hwgc"
 typedef struct HWGCDevState HWGCDevState;
 DECLARE_INSTANCE_CHECKER(HWGCDevState, HWGC_DEV, TYPE_HWGC_DEV)
