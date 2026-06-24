@@ -458,7 +458,8 @@ static void stage_oop_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[COMMON_OOP:0] read oop slot, task_addr=%lx\n",
                             d->task));
 
-        if (!hwgc_access(s, d->task, &d->offset, 8, false))
+        uint size = d->pars.useCompressedOops ? 4 : 8;
+        if (!hwgc_access(s, d->task, &d->offset, size, false))
             return;
 
         IFDEF(TRACE, printf("[COMMON_OOP:0] read offset/raw_oop=%lx\n",
@@ -741,7 +742,7 @@ static void stage_copy2survivor_function(HWGCDevState *s)
             if (d->kid == 2)
             {
                 uint oop_size_offset = d->pars.useCompressedKlassPointers ? 0x20 : 0x24;
-                if (!hwgc_access(s, d->from_obj + oop_size_offset, &d->size, 4, false))
+                if (!hwgc_access(s, d->from_obj + oop_size_offset, &d->size, 8, false))
                     return;
             }
             else
@@ -802,16 +803,18 @@ static void stage_copy2survivor_function(HWGCDevState *s)
                                     d->common_m_value, d->age));
             }
 
+            if (!hwgc_access(s, d->pars.pss + 0x17c, &d->pars.ageThreshold, 4, false))
+                return;
+
             if (d->age < d->pars.ageThreshold)
             {
                 d->dest_attr = d->src_region_attr;
                 d->dest_attr_ptr = d->src_region_attr_ptr;
-
-                IFDEF(TRACE, printf("[COPY2SURVIVOR:4] age=%u < threshold=%u, "
-                                    "keep source destination attr=0x%x\n",
-                                    d->age, d->pars.ageThreshold,
-                                    d->dest_attr));
             }
+            IFDEF(TRACE, printf("[COPY2SURVIVOR:4] age=%u < threshold=%u, "
+                                "keep source destination attr=0x%x dest_attr_ptr %lx\n",
+                                d->age, d->pars.ageThreshold,
+                                d->dest_attr, d->dest_attr_ptr));
         }
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:4] final dest_attr=0x%x "
@@ -877,10 +880,6 @@ static void stage_copy2survivor_function(HWGCDevState *s)
                                 d->to_obj, d->size,
                                 d->region_top, writeValue));
 
-            /*
-             * 必须写入 writeValue。
-             * 原代码传入 &d->region_top，会把旧 top 写回 PLAB。
-             */
             if (!hwgc_access(s, d->buffer + 0x30, &writeValue, 8, true))
                 return;
 
@@ -1034,6 +1033,8 @@ static void stage_copy2survivor_function(HWGCDevState *s)
 
             if (!hwgc_access(s, d->buffer + 0x30, &d->to_obj, 8, true))
                 return;
+
+            d->to_obj = d->forward_ptr;
 
             hwgc_goto_stage(s, STAGE_COMMON_OOP, 4);
         }
@@ -1195,9 +1196,6 @@ static void stage_alloc_function(HWGCDevState *s)
     {
         uintptr_t write_top;
 
-        /*
-         * destination attr type 设为 1，表示走 old / non-young 路径。
-         */
         d->dest_attr = (d->dest_attr & 0x00ff) | 0x0100;
 
         IFDEF(TRACE, printf("[ALLOC:3] set dest_attr=0x%x, "
@@ -1214,12 +1212,7 @@ static void stage_alloc_function(HWGCDevState *s)
                                 "to=%lx old_top=%lx new_top=%lx\n",
                                 d->to_obj, d->region_top, write_top));
 
-            /*
-             * 原代码传入 &d->region_top，会把旧 top 写回；
-             * 应写入新的 write_top。
-             */
-            if (!hwgc_access(s, d->buffer + 0x30,
-                             &write_top, 8, true))
+            if (!hwgc_access(s, d->buffer + 0x30, &write_top, 8, true))
                 return;
 
             d->region_top = write_top;
@@ -1304,7 +1297,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
         uintptr_t plab_stats_ptr = d->pars.g1h + 0x250;
 
         if (dest_attr_type == 1)
-            plab_stats_ptr = d->pars.g1h + 0x2e0;
+            plab_stats_ptr = d->pars.g1h + 0x2d0;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:0] g1h=%lx stats_ptr=%lx "
                             "stats_size_addr=%lx\n",
@@ -1317,6 +1310,8 @@ static void stage_allocate_direct_function(HWGCDevState *s)
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:0] raw_plab_word_size=%lx\n",
                             d->region_attr_ptr));
+
+        d->plab_refill_failed = false;
 
         s->sub_stage = 1;
         break;
@@ -1374,14 +1369,9 @@ static void stage_allocate_direct_function(HWGCDevState *s)
         }
         else
         {
-            /*
-             * 原代码跳到 25，但本函数没有 case 25，
-             * 会落入 default 并重新从 case 0 开始。
-             */
             IFDEF(TRACE, printf("[ALLOCATE_DIRECT:2] skip old PLAB, "
                                 "goto ALLOCATE_DURING_GC preparation\n"));
-
-            s->sub_stage = 5;
+            s->sub_stage = 7;
         }
         break;
     }
@@ -1411,11 +1401,9 @@ static void stage_allocate_direct_function(HWGCDevState *s)
     {
         if (d->region_top < d->region_hard_end)
         {
-            size_t words =
-                (d->region_hard_end - d->region_top) / 8;
+            size_t words = (d->region_hard_end - d->region_top) / 8;
             uintptr_t cur_klass = 0;
-            uint header_words =
-                d->pars.useCompressedKlassPointers ? 2 : 3;
+            uint header_words = d->pars.useCompressedKlassPointers ? 2 : 3;
 
             IFDEF(TRACE, printf("[ALLOCATE_DIRECT:4] fill abandoned PLAB "
                                 "top=%lx hard_end=%lx words=%zu\n",
@@ -1530,6 +1518,9 @@ static void stage_allocate_direct_function(HWGCDevState *s)
 
             IFDEF(TRACE, printf("[ALLOCATE_DIRECT:6] PLAB installed, "
                                 "return previous stage\n"));
+
+            if (d->actual_plab_size - 2 < d->size)
+                d->to_obj = 0;
 
             hwgc_return_previous(s);
         }
@@ -1719,6 +1710,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
             s->irq_par0 = lock_ptr;
             s->timer_running = false;
+            s->irq_to_sub_stage = 4;
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
@@ -1853,6 +1845,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
             s->irq_par0 = lock_ptr;
             s->timer_running = false;
+            s->irq_to_sub_stage = 8;
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
@@ -1868,15 +1861,10 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
     {
         if (d->to_obj == 0)
         {
-            lock_ptr = d->pars.lockPtr + 0x8;
             expected = 0;
             writed = 1;
 
-            IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:8] acquire global lock "
-                                "addr=%lx\n",
-                                lock_ptr + 8));
-
-            if (!hwgc_cmpxchg(s, lock_ptr + 8,
+            if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8,
                               expected, writed, 4, &get))
                 return;
 
@@ -1910,6 +1898,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             return;
 
         hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 0);
+        assert(true);
         break;
     }
 
@@ -1934,15 +1923,10 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
     case 11:
     {
-        lock_ptr = d->pars.lockPtr;
         expected = 1;
         writed = 0;
 
-        IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:11] release global lock "
-                            "addr=%lx\n",
-                            lock_ptr + 8));
-
-        if (!hwgc_cmpxchg(s, lock_ptr + 8,
+        if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8,
                           expected, writed, 4, &get))
             return;
 
@@ -1954,8 +1938,9 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:11] global lock waiters, "
                                 "raise IRQ_WAKE\n"));
 
-            s->irq_par0 = lock_ptr;
+            s->irq_par0 = d->pars.lockPtr + 8;
             s->timer_running = false;
+            s->irq_to_sub_stage = 5;
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
@@ -2015,27 +2000,7 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
 
     case 1:
     {
-        size_t available;
-
-        /*
-         * 防止 alloc_end < alloc_top 时的无符号下溢。
-         * 此时直接视为本次分配失败，交由后续状态处理。
-         */
-        if (d->alloc_end < d->alloc_top)
-        {
-            d->want_to_allocate = 0;
-            d->actual_plab_size = 0;
-            d->to_obj = 0;
-
-            IFDEF(TRACE, printf("[PAR_ALLOCATE_IML:1] WARNING: invalid range "
-                                "top=%lx > end=%lx, allocation failed\n",
-                                d->alloc_top, d->alloc_end));
-
-            s->sub_stage = 2;
-            break;
-        }
-
-        available = (d->alloc_end - d->alloc_top) / 8;
+        size_t available = (d->alloc_end - d->alloc_top) / 8;
         d->want_to_allocate = MIN(available, d->desired_word_size);
 
         IFDEF(TRACE, printf("[PAR_ALLOCATE_IML:1] available=%zu words "
@@ -2045,18 +2010,13 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
 
         if (d->want_to_allocate >= d->min_word_size)
         {
-            uintptr_t new_top =
-                d->alloc_top + d->want_to_allocate * 8;
+            uintptr_t new_top = d->alloc_top + d->want_to_allocate * 8;
 
             IFDEF(TRACE, printf("[PAR_ALLOCATE_IML:1] CAS top: addr=%lx "
                                 "old=%lx new=%lx\n",
                                 d->alloc_region + 0x10,
                                 d->alloc_top, new_top));
 
-            /*
-             * region_attr_ptr 作为 CAS 返回值的持久化存储。
-             * hwgc_cmpxchg 可能异步返回，不能改为局部变量。
-             */
             if (!hwgc_cmpxchg(s, d->alloc_region + 0x10,
                               d->alloc_top, new_top, 8,
                               &d->region_attr_ptr))
@@ -2079,9 +2039,6 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
             }
             else
             {
-                /*
-                 * 其他 worker 先更新了 top，重新读取 top/end 后重试。
-                 */
                 s->sub_stage = 0;
             }
         }
@@ -2248,11 +2205,6 @@ static void stage_par_allocate_function(HWGCDevState *s)
     case 4:
     {
         uint8_t value = (uint8_t)((d->next_offset_threshold - d->blk_start) / 8);
-
-        IFDEF(TRACE, printf("[PAR_ALLOCATE:4] write initial BOT value "
-                            "array[%zu]=%u addr=%lx\n",
-                            d->index, value, d->array + d->index));
-
         if (!hwgc_access(s, d->array + d->index, &value, 1, true))
             return;
 
@@ -2275,27 +2227,9 @@ static void stage_par_allocate_function(HWGCDevState *s)
 
     case 6:
     {
-        size_t end_index;
-        uintptr_t rem_st;
-        uintptr_t rem_end;
-
-        /*
-         * 避免 blk_end - 8 - reserved_start 出现无符号下溢。
-         * 出现该情况说明当前块不需要进行后续 BOT 批量标记。
-         */
-        if (d->blk_end <= d->reserved_start + 8)
-        {
-            IFDEF(TRACE, printf("[PAR_ALLOCATE:6] invalid BOT range: "
-                                "blk_end=%lx reserved_start=%lx, skip\n",
-                                d->blk_end, d->reserved_start));
-
-            s->sub_stage = 9;
-            break;
-        }
-
-        end_index = (d->blk_end - 8 - d->reserved_start) >> 9;
-        rem_st = d->reserved_start + ((d->index + 1) << 6) * 8;
-        rem_end = d->reserved_start + ((end_index << 6) + 64) * 8;
+        size_t end_index = (d->blk_end - 8 - d->reserved_start) >> 9;
+        uintptr_t rem_st = d->reserved_start + ((d->index + 1) << 6) * 8;
+        uintptr_t rem_end = d->reserved_start + ((end_index << 6) + 64) * 8;
 
         d->start_card = (rem_st - d->reserved_start) >> 9;
         d->end_card = (rem_end - 8 - d->reserved_start) >> 9;
@@ -2451,14 +2385,6 @@ static void stage_trace_function(HWGCDevState *s)
         {
             uintptr_t len_addr;
 
-            if (d->pars.chunkSize == 0)
-            {
-                IFDEF(TRACE, printf("[TRACE:0] ERROR: chunkSize is zero\n"));
-
-                hwgc_goto_stage(s, STAGE_COMMON_OOP, 4);
-                break;
-            }
-
             d->end = d->common_oop_array_length % d->pars.chunkSize;
             len_addr = d->to_obj +
                        (d->pars.useCompressedKlassPointers ? 12 : 16);
@@ -2516,9 +2442,6 @@ static void stage_trace_function(HWGCDevState *s)
                                 "current chunk, no extra task\n"));
         }
 
-        /*
-         * 原来跳转到 case 3，导致 case 2 的数组元素扫描不可达。
-         */
         s->sub_stage = 2;
         break;
     }
@@ -2597,16 +2520,11 @@ static void stage_trace_function(HWGCDevState *s)
     {
         if (d->start_map < d->end_map)
         {
-            d->end_map -= 8;
-
-            IFDEF(TRACE, printf("[TRACE:5] read oop-map entry addr=%lx "
-                                "remaining_entries=%zu\n",
-                                d->end_map,
-                                (d->end_map - d->start_map) / 8 + 1));
-
-            if (!hwgc_access(s, d->end_map,
-                             &d->region_attr_ptr, 8, false))
+            uintptr_t read_addr = d->end_map - 8;
+            if (!hwgc_access(s, read_addr, &d->region_attr_ptr, 8, false))
                 return;
+
+            d->end_map = read_addr;
 
             IFDEF(TRACE, printf("[TRACE:5] oop-map entry raw=%lx\n",
                                 d->region_attr_ptr));
@@ -2941,12 +2859,6 @@ static void stage_do_oop_work_function(HWGCDevState *s)
                             "region_attr_addr=%lx\n",
                             d->heap_oop, region_attr_addr));
 
-        /*
-         * region_attr_ptr 用作异步 hwgc_access 的持久化读取缓冲区。
-         * 读取后其低 16 位保存实际 Region Attr。
-         */
-        d->region_attr_ptr = region_attr_addr;
-
         if (!hwgc_access(s, region_attr_addr,
                          &d->region_attr_ptr, 2, false))
             return;
@@ -3089,10 +3001,6 @@ static void stage_do_oop_work_function(HWGCDevState *s)
         }
         else
         {
-            /*
-             * 原代码使用 d->region_attr；该字段在当前流程未更新。
-             * region_attr_ptr 的低 16 位才是 case 1 实际读取到的属性。
-             */
             d->aop_region_attr = (uint16_t)d->region_attr_ptr;
             d->aop_dest = d->dest;
 
@@ -3263,35 +3171,22 @@ static void stage_aop_work_function(HWGCDevState *s)
                          &d->old_node, 8, false))
             return;
 
-        /*
-         * 原代码后续访问 d->node，但没有为它赋值。
-         * 当前空闲链表头即为待使用的新节点。
-         */
-        d->node = d->old_node;
-
         IFDEF(TRACE, printf("[AOP_WORK:3] free-list head node=%lx\n",
-                            d->node));
+                            d->old_node));
 
-        if (d->node != 0)
+        if (d->old_node != 0)
         {
-            uintptr_t node_next_check;
-
-            if (!hwgc_access(s, d->node + 0x8,
+            if (!hwgc_access(s, d->old_node + 0x8,
                              &d->new_top, 8, false))
                 return;
 
-            /*
-             * 保留原有第二次读取行为，但用指针宽度变量承接，
-             * 避免原 uint32_t + 8 字节读取造成栈覆盖。
-             */
-            if (!hwgc_access(s, d->node + 0x8,
-                             &node_next_check, 8, false))
+            uintptr_t zero = 0;
+            if (!hwgc_access(s, d->old_node + 0x8,
+                             &zero, 8, true))
                 return;
 
-            IFDEF(TRACE, printf("[AOP_WORK:3] node=%lx next=%lx "
-                                "check=%lx\n",
-                                d->node, d->new_top,
-                                node_next_check));
+            IFDEF(TRACE, printf("[AOP_WORK:3] node=%lx next=%lx \n",
+                                d->old_node, d->new_top));
         }
 
         s->sub_stage = 4;
@@ -3315,27 +3210,31 @@ static void stage_aop_work_function(HWGCDevState *s)
 
     case 5:
     {
-        if (d->node == 0)
+        if (d->old_node == 0)
         {
             IFDEF(TRACE, printf("[AOP_WORK:5] no free node, "
                                 "raise IRQ_ALLOCATE\n"));
 
             s->irq_par0 = d->node_allocator_ptr;
             s->timer_running = false;
+            s->irq_to_sub_stage = 6;
             qatomic_or(&s->status, ST_WAIT_ALLOCATE);
 
             hwgc_raise_irq_from_worker(s, IRQ_ALLOCATE);
             return;
         }
 
-        IFDEF(TRACE, printf("[AOP_WORK:5] acquired node=%lx\n", d->node));
+        IFDEF(TRACE, printf("[AOP_WORK:5] acquired node=%lx\n", d->old_node));
         s->sub_stage = 6;
         break;
     }
 
     case 6:
     {
-        d->buffer = d->node + 0x10;
+        d->buffer = d->old_node + 0x10;
+
+        if (!hwgc_access(s, d->pars.pss + 0x58, &d->buffer, 8, true))
+            return;
 
         IFDEF(TRACE, printf("[AOP_WORK:6] new buffer=%lx, "
                             "read node index addr=%lx\n",
@@ -3344,6 +3243,8 @@ static void stage_aop_work_function(HWGCDevState *s)
         if (!hwgc_access(s, d->node_allocator_ptr,
                          &d->index, 8, false))
             return;
+
+        d->index = d->index * 8;
 
         IFDEF(TRACE, printf("[AOP_WORK:6] new buffer index=%lx\n",
                             d->index));
@@ -3354,19 +3255,7 @@ static void stage_aop_work_function(HWGCDevState *s)
 
     case 7:
     {
-        int idx;
-
-        if (d->index < 8)
-        {
-            IFDEF(TRACE, printf("[AOP_WORK:7] invalid index=%lx, "
-                                "cannot append card\n",
-                                d->index));
-
-            hwgc_return_previous(s);
-            break;
-        }
-
-        idx = d->index / 8 - 1;
+        int idx = d->index / 8 - 1;
 
         IFDEF(TRACE, printf("[AOP_WORK:7] append card=%lx "
                             "buffer_slot=%d addr=%lx\n",
@@ -3725,13 +3614,13 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
                 }
                 else if (s->status & ST_WAIT_ALLOCATE)
                 {
-                    s->stageData.node = s->irq_res0;
-                    s->sub_stage++;
+                    s->stageData.old_node = s->irq_res0;
+                    s->sub_stage = s->irq_to_sub_stage;
                     qatomic_and(&s->status, ~ST_WAIT_ALLOCATE);
                 }
                 else if (s->status & ST_WAIT_WAKE)
                 {
-                    s->sub_stage++;
+                    s->sub_stage = s->irq_to_sub_stage;
                     qatomic_and(&s->status, ~ST_WAIT_WAKE);
                 }
 
@@ -3840,7 +3729,7 @@ static void hwgc_realize(PCIDevice *pdev, Error **errp)
     qemu_mutex_init(&s->lock);
     qemu_cond_init(&s->cond);
 
-    s->period_ns = 1000000; /* default: 1 ms per simulated hardware cycle */
+    s->period_ns = 1; /* default: 1 ms per simulated hardware cycle */
     s->thread_stop = false;
     s->timer_running = false;
     s->tick_pending = false;

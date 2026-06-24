@@ -367,6 +367,7 @@ struct HWGCDevState
     enum HWGCStage stage;
     int sub_stage;
     uint32_t irq_source;
+    uint irq_to_sub_stage;
 
     uint64_t irq_par0;
     uint64_t irq_par1;
