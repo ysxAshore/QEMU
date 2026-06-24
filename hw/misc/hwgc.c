@@ -1898,7 +1898,6 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             return;
 
         hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 0);
-        assert(true);
         break;
     }
 
@@ -1959,6 +1958,233 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
         hwgc_goto_stage(s, STAGE_ALLOCATE_DURING_GC, 0);
         break;
     }
+}
+
+static void stage_attempt_alloc_function(HWGCDevState *s)
+{
+    struct HWGCStageData *d = &s->stageData;
+
+    switch (s->sub_stage)
+    {
+    case 0:
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:0] start region_ptr=%lx alloc_region=%lx "
+                            "dummy=%lx min=%lx desired=%lx \n",
+                            d->region_ptr, d->alloc_region, d->pars.dummyRegion,
+                            d->min_word_size, d->desired_word_size));
+        if (!hwgc_access(s, d->region_ptr + 0x40, &d->region_ptr_type, 1, false))
+            return;
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:0] access %lx (%x bytes) to get %x\n",
+                            d->region_ptr + 0x40, 1, d->region_ptr_type));
+
+        if (!hwgc_access(s, d->region_ptr + 0x18, &d->region_attr_ptr, 8, false))
+            return;
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:0] access %lx (%x bytes) to get %lx\n",
+                            d->region_ptr + 0x18, 8, d->region_attr_ptr));
+
+        s->sub_stage = 1;
+        break;
+
+    case 1:
+        if (d->alloc_region != d->pars.dummyRegion)
+        {
+            if (!hwgc_access(s, d->alloc_region, &d->alloc_end, 8, false))
+                return;
+            if (!hwgc_access(s, d->alloc_region + 0x10, &d->alloc_top, 8, false))
+                return;
+            if (!hwgc_access(s, d->alloc_region + 0xe8, &d->alloc_start, 8, false))
+                return;
+
+            d->allocated_bytes = d->alloc_top - d->alloc_end - d->region_attr_ptr;
+
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:1] close old alloc_region=%lx "
+                                "bottom=%lx top=%lx start=%lx used_before=%lx "
+                                "allocated_bytes=%lx\n",
+                                d->alloc_region, d->alloc_end, d->alloc_top,
+                                d->alloc_start, d->region_attr_ptr,
+                                d->allocated_bytes));
+
+            s->sub_stage = 2;
+        }
+        else
+        {
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:1] alloc_region is dummy, "
+                                "skip old region close\n"));
+            s->sub_stage = 8;
+        }
+        break;
+
+    case 2:
+        if (d->region_ptr_type == 1)
+        {
+            uintptr_t addr = d->pars.g1h + 0xa0 + 0x10;
+            if (!hwgc_access(s, addr, &d->region_attr_ptr, 4, false))
+                return;
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:2] access %lx (%x bytes) to get %x\n",
+                                addr, 4, (uint32_t)d->region_attr_ptr));
+
+            d->region_attr_ptr += 1;
+            if (!hwgc_access(s, addr, &d->region_attr_ptr, 4, true))
+                return;
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:2] access %lx (%x bytes) to write %x\n",
+                                addr, 4, (uint32_t)d->region_attr_ptr));
+        }
+        else
+        {
+            uintptr_t addr = d->pars.g1h + 0x3f8 + 0x10;
+            if (!hwgc_access(s, addr, &d->region_attr_ptr, 8, false))
+                return;
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:2] access %lx (%x bytes) to get %lx\n",
+                                addr, 8, d->region_attr_ptr));
+
+            d->region_attr_ptr += d->allocated_bytes;
+            if (!hwgc_access(s, addr, &d->region_attr_ptr, 8, true))
+                return;
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:2] access %lx (%x bytes) to write %lx\n",
+                                addr, 8, d->region_attr_ptr));
+        }
+        s->sub_stage = 3;
+        break;
+
+    case 3:
+    {
+        bool during_im_cache;
+        if (!hwgc_access(s, d->pars.g1h + 0x3c1, &during_im_cache, 1, false))
+            return;
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:3] access %lx (%x bytes) to get %x\n",
+                            d->pars.g1h + 0x3c1, 1, during_im_cache));
+
+        if (during_im_cache && d->allocated_bytes > 0)
+        {
+            if (!hwgc_access(s, d->pars.g1h + 0x4e8, &d->cm_cache, 8, false))
+                return;
+            s->sub_stage = 4;
+        }
+        else
+            s->sub_stage = 7;
+
+        break;
+    }
+
+    case 4:
+        if (!hwgc_access(s, d->cm_cache + 0xb0, &d->root_regions_ptr, 8, false))
+            return;
+
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:4] root_regions_ptr=%lx "
+                            "from cm_cache=%lx\n",
+                            d->root_regions_ptr,
+                            d->cm_cache));
+        s->sub_stage = 5;
+        break;
+
+    case 5:
+        if (!hwgc_access(s, d->root_regions_ptr, &d->root_regions_array, 8, false))
+            return;
+        if (!hwgc_access(s, d->root_regions_ptr + 0x10, &d->root_regions_idx, 8, false))
+            return;
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:5] root_regions_array=%lx idx=%lx\n",
+                            d->root_regions_array,
+                            d->root_regions_idx));
+        s->sub_stage = 6;
+        break;
+
+    case 6:
+    {
+        uintptr_t addr = d->root_regions_array + d->root_regions_idx * 0x10;
+        if (!hwgc_access(s, addr, &d->alloc_start, 8, true))
+            return;
+
+        uintptr_t writeValue = (d->alloc_top - d->alloc_start) >> 3;
+        if (!hwgc_access(s, addr + 0x8, &writeValue, 8, true))
+            return;
+
+        d->root_regions_idx += 1;
+        if (!hwgc_access(s, d->root_regions_ptr + 0x10, &d->root_regions_idx, 8, true))
+            return;
+
+        s->sub_stage = 7;
+        break;
+    }
+
+    case 7:
+        d->region_attr_ptr = 0;
+        if (!hwgc_access(s, d->region_ptr + 0x18, &d->region_attr_ptr, 8, true))
+            return;
+        if (!hwgc_access(s, d->region_ptr + 0x8, &d->pars.dummyRegion, 8, true))
+            return;
+        s->sub_stage = 8;
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:7] old alloc_region closed and reset\n"));
+
+        break;
+
+    case 8:
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:8] request new_gc_alloc_region "
+                            "region_ptr=%lx desired=%lx type=%x\n",
+                            d->region_ptr,
+                            d->desired_word_size,
+                            d->region_ptr_type));
+
+        hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, 0);
+        break;
+
+    case 9:
+        if (d->new_alloc_region == 0)
+        {
+            d->to_obj = 0;
+            IFDEF(TRACE, printf("[ATTEMPT_ALLOC:9] new_alloc_region is null, "
+                                "attempt allocation failed\n"));
+            hwgc_goto_stage(s, STAGE_ALLOCATE_DURING_GC, 10);
+            return;
+        }
+
+        if (!hwgc_access(s, d->region_ptr + 0x20, &d->bot_updates, 1, false))
+            return;
+
+        d->alloc_region = d->new_alloc_region;
+        d->min_word_size = d->desired_word_size;
+        d->par_alloc_sel = 2;
+        hwgc_goto_stage(s, STAGE_PAR_ALLOCATE, 0);
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:9] attempt goto par_allocate\n"));
+        return;
+
+    case 10:
+        d->region_attr_ptr = 0;
+        if (!hwgc_access(s, d->new_alloc_region + 0xa8, &d->region_attr_ptr, 8, true))
+            return;
+        if (!hwgc_access(s, d->new_alloc_region, &d->alloc_end, 8, false))
+            return;
+        if (!hwgc_access(s, d->new_alloc_region + 0x10, &d->alloc_top, 8, false))
+            return;
+        d->region_attr_ptr = d->alloc_top - d->alloc_end;
+        if (!hwgc_access(s, d->region_ptr + 0x18, &d->region_attr_ptr, 8, true))
+            return;
+        if (!hwgc_access(s, d->region_ptr + 0x8, &d->new_alloc_region, 8, true))
+            return;
+
+        if (!hwgc_access(s, d->region_ptr + 0x10, &d->region_attr_ptr, 4, false))
+            return;
+        d->region_attr_ptr += 1;
+        if (!hwgc_access(s, d->region_ptr + 0x10, &d->region_attr_ptr, 4, true))
+            return;
+
+        if (d->to_obj != 0)
+            d->actual_plab_size = d->desired_word_size;
+
+        hwgc_goto_stage(s, STAGE_ALLOCATE_DURING_GC, 10);
+
+        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:10] updated region_ptr success and return allocate_during_gc\n"));
+        break;
+
+    default:
+        break;
+    }
+}
+
+static void stage_new_gc_alloc_function(HWGCDevState *s)
+{
+}
+
+static void stage_new_alloc_free_region(HWGCStage *s)
+{
 }
 
 static void stage_par_allocate_iml_function(HWGCDevState *s)
@@ -2333,7 +2559,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
             IFDEF(TRACE, printf("[PAR_ALLOCATE:9] "
                                 "goto ATTEMPT_ALLOC:17\n"));
 
-            hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 17);
+            hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 10);
         }
         else if (d->par_alloc_sel == 1)
         {

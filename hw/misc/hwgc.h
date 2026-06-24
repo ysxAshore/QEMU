@@ -256,7 +256,6 @@ struct HWGCStageData
     uintptr_t last;
 
     uintptr_t remaining;
-    uint buf[256];
     uintptr_t offset30;
     uintptr_t offset38;
 
@@ -282,43 +281,6 @@ struct HWGCStageData
     size_t start_card;
     size_t end_card;
     size_t reach;
-    size_t num_cards;
-    uint8_t ct_offset;
-
-    size_t allocated_bytes;
-    int8_t type;
-    uintptr_t new_alloc_region;
-    uintptr_t cm;
-    uintptr_t root_regions_array;
-    uintptr_t mem_region;
-    uintptr_t next_top;
-
-    uint32_t region_node_index;
-    uint32_t array_len;
-    uint32_t array_max;
-
-    uintptr_t policy_ptr;
-    uintptr_t grow_array_ptr;
-    uintptr_t data_ptr;
-    uintptr_t count_per_node;
-    uintptr_t numa;
-
-    bool expand_failure;
-    bool allocate_free_sel;
-
-    bool from_head;
-    uint32_t active_node_ids;
-    uint32_t region_size;
-    uint32_t page_size;
-    uint32_t cur_depth;
-    uint32_t max_depth;
-
-    uintptr_t free_list_ptr;
-    uintptr_t cur;
-    uintptr_t prev;
-    uintptr_t next;
-
-    uintptr_t data;
 
     int end;
     int vtable_len;
@@ -344,6 +306,16 @@ struct HWGCStageData
     uint16_t aop_region_attr;
     uintptr_t aop_region_attr_ptr;
     uintptr_t aop_dest;
+
+    int8_t region_ptr_type;
+    size_t allocated_bytes;
+    uintptr_t alloc_start;
+    uintptr_t cm_cache;
+    uintptr_t root_regions_ptr;
+    uintptr_t root_regions_array;
+    uintptr_t root_regions_idx;
+
+    uintptr_t new_alloc_region;
 };
 
 struct HWGCDevState
