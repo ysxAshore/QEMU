@@ -19,6 +19,7 @@ static void hwgc_tlb_insert_locked(HWGCDevState *s, uint64_t va, hwaddr pa)
     s->tlb[idx].pa_page = pa_page;
 
     IFDEF(TRACE, printf("[hwgc] TLB insert: idx=%u va_page=0x%016" PRIx64
+
                         " pa_page=0x%016" HWADDR_PRIx "\n",
                         idx, va_page, pa_page));
 }
@@ -99,7 +100,7 @@ static bool hwgc_translate(HWGCDevState *s, uint64_t va, uint32_t access, hwaddr
 
     if (!hit)
     {
-        printf("translate not hit\n");
+        IFDEF(TRACE, printf("translate not hit\n"));
         hwgc_pause_for_tlb_miss(s, va, access);
         return false;
     }
@@ -237,7 +238,7 @@ static void stage_fetch_function(HWGCDevState *s)
     }
 
     uint elems_bias = (d->localBot - 1) & ((1 << 17) - 1);
-    printf("elems bias %x, addr %lx\n", elems_bias, d->pars.taskQueueElemsBase + elems_bias * 8);
+    IFDEF(TRACE, printf("elems bias %x, addr %lx\n", elems_bias, d->pars.taskQueueElemsBase + elems_bias * 8));
     if (!hwgc_access(s, d->pars.taskQueueElemsBase + elems_bias * 8, &d->task, 8, false))
         return;
     d->localBot = elems_bias;
@@ -252,7 +253,7 @@ static void stage_fetch_function(HWGCDevState *s)
         d->task -= (d->task & 0x3);
         hwgc_goto_stage(s, STAGE_COMMON_OOP, 0);
     }
-    printf("dispatch task %lx\n", d->task);
+    IFDEF(TRACE, printf("dispatch task %lx\n", d->task));
 }
 
 static void stage_partial_array_function(HWGCDevState *s)
@@ -459,6 +460,7 @@ static void stage_oop_function(HWGCDevState *s)
                             d->task));
 
         uint size = d->pars.useCompressedOops ? 4 : 8;
+        d->offset = 0;
         if (!hwgc_access(s, d->task, &d->offset, size, false))
             return;
 
@@ -1714,6 +1716,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
+            break;
         }
         else
         {
@@ -1730,6 +1733,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                                 "read allocator full flag addr=%lx\n",
                                 d->allocator_ptr + 0x10));
 
+            d->region_attr_ptr = 0;
             if (!hwgc_access(s, d->allocator_ptr + 0x10,
                              &d->region_attr_ptr, 1, false))
                 return;
@@ -1849,6 +1853,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
+            break;
         }
         else
         {
@@ -1864,8 +1869,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             expected = 0;
             writed = 1;
 
-            if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8,
-                              expected, writed, 4, &get))
+            if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8, expected, writed, 4, &get))
                 return;
 
             IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:8] global lock CAS "
@@ -1943,6 +1947,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             qatomic_or(&s->status, ST_WAIT_WAKE);
 
             hwgc_raise_irq_from_worker(s, IRQ_WAKE);
+            break;
         }
         else
         {
@@ -2009,7 +2014,7 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         {
             IFDEF(TRACE, printf("[ATTEMPT_ALLOC:1] alloc_region is dummy, "
                                 "skip old region close\n"));
-            s->sub_stage = 8;
+            s->sub_stage = 7;
         }
         break;
 
@@ -2017,6 +2022,7 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         if (d->region_ptr_type == 1)
         {
             uintptr_t addr = d->pars.g1h + 0xa0 + 0x10;
+            d->region_attr_ptr = 0;
             if (!hwgc_access(s, addr, &d->region_attr_ptr, 4, false))
                 return;
             IFDEF(TRACE, printf("[ATTEMPT_ALLOC:2] access %lx (%x bytes) to get %x\n",
@@ -2060,23 +2066,13 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
             s->sub_stage = 4;
         }
         else
-            s->sub_stage = 7;
+            s->sub_stage = 6;
 
         break;
     }
 
     case 4:
-        if (!hwgc_access(s, d->cm_cache + 0xb0, &d->root_regions_ptr, 8, false))
-            return;
-
-        IFDEF(TRACE, printf("[ATTEMPT_ALLOC:4] root_regions_ptr=%lx "
-                            "from cm_cache=%lx\n",
-                            d->root_regions_ptr,
-                            d->cm_cache));
-        s->sub_stage = 5;
-        break;
-
-    case 5:
+        d->root_regions_ptr = d->cm_cache + 0xb0;
         if (!hwgc_access(s, d->root_regions_ptr, &d->root_regions_array, 8, false))
             return;
         if (!hwgc_access(s, d->root_regions_ptr + 0x10, &d->root_regions_idx, 8, false))
@@ -2084,10 +2080,10 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[ATTEMPT_ALLOC:5] root_regions_array=%lx idx=%lx\n",
                             d->root_regions_array,
                             d->root_regions_idx));
-        s->sub_stage = 6;
+        s->sub_stage = 5;
         break;
 
-    case 6:
+    case 5:
     {
         uintptr_t addr = d->root_regions_array + d->root_regions_idx * 0x10;
         if (!hwgc_access(s, addr, &d->alloc_start, 8, true))
@@ -2101,22 +2097,22 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         if (!hwgc_access(s, d->root_regions_ptr + 0x10, &d->root_regions_idx, 8, true))
             return;
 
-        s->sub_stage = 7;
+        s->sub_stage = 6;
         break;
     }
 
-    case 7:
+    case 6:
         d->region_attr_ptr = 0;
         if (!hwgc_access(s, d->region_ptr + 0x18, &d->region_attr_ptr, 8, true))
             return;
         if (!hwgc_access(s, d->region_ptr + 0x8, &d->pars.dummyRegion, 8, true))
             return;
-        s->sub_stage = 8;
+        s->sub_stage = 7;
         IFDEF(TRACE, printf("[ATTEMPT_ALLOC:7] old alloc_region closed and reset\n"));
 
         break;
 
-    case 8:
+    case 7:
         IFDEF(TRACE, printf("[ATTEMPT_ALLOC:8] request new_gc_alloc_region "
                             "region_ptr=%lx desired=%lx type=%x\n",
                             d->region_ptr,
@@ -2126,7 +2122,7 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, 0);
         break;
 
-    case 9:
+    case 8:
         if (d->new_alloc_region == 0)
         {
             d->to_obj = 0;
@@ -2146,7 +2142,7 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[ATTEMPT_ALLOC:9] attempt goto par_allocate\n"));
         return;
 
-    case 10:
+    case 9:
         d->region_attr_ptr = 0;
         if (!hwgc_access(s, d->new_alloc_region + 0xa8, &d->region_attr_ptr, 8, true))
             return;
@@ -2154,12 +2150,14 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
             return;
         if (!hwgc_access(s, d->new_alloc_region + 0x10, &d->alloc_top, 8, false))
             return;
+
         d->region_attr_ptr = d->alloc_top - d->alloc_end;
         if (!hwgc_access(s, d->region_ptr + 0x18, &d->region_attr_ptr, 8, true))
             return;
         if (!hwgc_access(s, d->region_ptr + 0x8, &d->new_alloc_region, 8, true))
             return;
 
+        d->region_attr_ptr = 0;
         if (!hwgc_access(s, d->region_ptr + 0x10, &d->region_attr_ptr, 4, false))
             return;
         d->region_attr_ptr += 1;
@@ -2181,10 +2179,400 @@ static void stage_attempt_alloc_function(HWGCDevState *s)
 
 static void stage_new_gc_alloc_function(HWGCDevState *s)
 {
+    struct HWGCStageData *d = &s->stageData;
+    switch (s->sub_stage)
+    {
+    case 0:
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:0] start region_ptr=%lx word_sz=%lx "
+                            "type=%x\n",
+                            d->region_ptr,
+                            d->desired_word_size,
+                            d->region_ptr_type));
+
+        if (!hwgc_access(s, d->region_ptr + 0x30, &d->node_index, 4, false))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:0] access %lx (%x bytes) to get %x\n",
+                            d->region_ptr + 0x30, 4, d->node_index));
+
+        if (d->region_ptr_type == 1)
+            d->heap_region_type = 0x10;
+        else
+            d->heap_region_type = 0x3;
+
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:0] select heap_region_type=%x "
+                            "node_index=%x\n",
+                            d->heap_region_type,
+                            d->node_index));
+
+        d->alloc_free_sel = 0;
+        hwgc_goto_stage(s, STAGE_ALLOCATE_FREE, 0);
+        break;
+
+    case 1:
+    {
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:2] alloc_free res=%lx\n",
+                            d->new_alloc_region));
+        if (d->new_alloc_region == 0)
+        {
+            bool expand_failure;
+            if (!hwgc_access(s, d->pars.g1h + 0x370, &expand_failure, 1, false))
+                return;
+
+            if (expand_failure)
+            {
+                d->region_attr_ptr = 0;
+                s->irq_par0 = d->node_index;
+                s->timer_running = false;
+                s->irq_to_sub_stage = 2;
+                qatomic_or(&s->status, ST_WAIT_EXPAND);
+
+                printf("raise irq expand\n");
+                hwgc_raise_irq_from_worker(s, IRQ_EXPAND);
+                return;
+            }
+            else
+                s->sub_stage = 3;
+        }
+        else
+            s->sub_stage = 3;
+        break;
+    }
+
+    case 2:
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:2] expand irq result=%lx\n",
+                            d->region_attr_ptr));
+        if (d->region_attr_ptr)
+        {
+            d->alloc_free_sel = 1;
+            hwgc_goto_stage(s, STAGE_ALLOCATE_FREE, 0);
+        }
+        else
+        {
+            if (!hwgc_access(s, d->pars.g1h + 0x370, &d->region_attr_ptr, 1, true))
+                return;
+            s->sub_stage = 3;
+        }
+        break;
+
+    case 3:
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:3] new_region result=%lx\n",
+                            d->new_alloc_region));
+
+        if (d->new_alloc_region == 0)
+        {
+            IFDEF(TRACE, printf("[NEW_GC_ALLOC:3] new_alloc_region is null, "
+                                "return 0\n"));
+
+            hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 8);
+            return;
+        }
+        else
+        {
+            if (!hwgc_access(s, d->pars.g1h + 0x3f8 + 0x8, &d->grow_array_ptr, 8, false))
+                return;
+            IFDEF(TRACE, printf("[NEW_GC_ALLOC:3] update grow_array_ptr_cache=%lx\n",
+                                d->grow_array_ptr));
+            s->sub_stage = 4;
+        }
+        break;
+
+    case 4:
+        if (!hwgc_access(s, d->new_alloc_region + 0xbc, &d->heap_region_type, 4, true))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:4] access %lx (%x bytes) to write %x\n",
+                            d->new_alloc_region + 0xbc, 4,
+                            d->heap_region_type));
+        if (!hwgc_access(s, d->new_alloc_region + 0xb0, &d->remset_ptr, 8, false))
+            return;
+
+        if (!hwgc_access(s, d->new_alloc_region + 0xb8, &d->node_index, 4, false))
+            return;
+
+        if (d->heap_region_type == 0x3)
+        {
+            IFDEF(TRACE, printf("[NEW_GC_ALLOC:4] survivor region, "
+                                "append to grow array\n"));
+            s->sub_stage = 5;
+        }
+        else
+        {
+            IFDEF(TRACE, printf("[NEW_GC_ALLOC:4] old region, "
+                                "skip grow array append\n"));
+            s->sub_stage = 8;
+        }
+        break;
+
+    case 5:
+        if (!hwgc_access(s, d->grow_array_ptr, &d->region_attr_ptr, 8, false))
+            return;
+        if (!hwgc_access(s, d->grow_array_ptr + 0x8, &d->data_ptr, 8, false))
+            return;
+
+        d->grow_array_len = (uint)d->region_attr_ptr;
+        d->grow_array_max = (uint)(d->region_attr_ptr >> 32);
+
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:5] grow array len=%x max=%x\n",
+                            d->grow_array_len,
+                            d->grow_array_max));
+
+        if (d->grow_array_len == d->grow_array_max)
+        {
+            IFDEF(TRACE, printf("[NEW_GC_ALLOC:5] needs interrupt to call "
+                                "grow array grow len=%x\n",
+                                d->grow_array_len));
+            s->irq_par0 = d->grow_array_ptr;
+            s->irq_par1 = d->grow_array_len;
+            s->timer_running = false;
+            s->irq_to_sub_stage = 6;
+            qatomic_or(&s->status, ST_WAIT_GROW);
+
+            hwgc_raise_irq_from_worker(s, IRQ_GROW);
+            break;
+        }
+        else
+            s->sub_stage = 6;
+        break;
+
+    case 6:
+    {
+        d->region_attr_ptr = d->grow_array_len + 1;
+
+        if (!hwgc_access(s, d->grow_array_ptr, &d->region_attr_ptr, 4, true))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:6] access %lx (%x bytes) to write %lx\n",
+                            d->grow_array_ptr, 4,
+                            d->region_attr_ptr));
+        s->sub_stage = 7;
+        break;
+    }
+
+    case 7:
+    {
+        uintptr_t addr = d->data_ptr + ((uintptr_t)d->grow_array_len * 8);
+
+        if (!hwgc_access(s, addr, &d->new_alloc_region, 8, true))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:7] access %lx (%x bytes) to write %lx\n",
+                            addr, 8,
+                            d->new_alloc_region));
+
+        s->sub_stage = 8;
+        break;
+    }
+
+    case 8:
+    {
+        uintptr_t addr = d->remset_ptr + 0xf0;
+
+        uint writeValue;
+
+        if ((d->heap_region_type & 0x2) != 0)
+            writeValue = 2;
+        else if ((d->heap_region_type & 0x10) != 0)
+            writeValue = 0;
+
+        if (!hwgc_access(s, addr, &writeValue, 4, true))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:8] access %lx (%x bytes) to write %x\n",
+                            addr, 4,
+                            writeValue));
+
+        s->sub_stage = 9;
+        break;
+    }
+
+    case 9:
+    {
+        uintptr_t addr = d->pars.g1h + 0x580;
+
+        if (!hwgc_access(s, addr + 0x10, &d->region_attr_base, 8, false))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:9] access %lx (%x bytes) to get %lx\n",
+                            addr + 0x10, 8,
+                            d->region_attr_base));
+
+        s->sub_stage = 10;
+        break;
+    }
+
+    case 10:
+    {
+        uintptr_t addr = d->region_attr_base + d->node_index * 2;
+        uint8_t writeValue = ((d->heap_region_type & 0x10) == 0);
+        if (!hwgc_access(s, addr, &writeValue, 1, true))
+            return;
+        IFDEF(TRACE, printf("[NEW_GC_ALLOC:10] access %lx (%x bytes) to write %x\n",
+                            addr, 1, writeValue));
+        hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 8);
+        break;
+    }
+
+    default:
+        break;
+    }
 }
 
-static void stage_new_alloc_free_region(HWGCStage *s)
+static void stage_alloc_free_region_function(HWGCDevState *s)
 {
+    struct HWGCStageData *d = &s->stageData;
+
+    switch (s->sub_stage)
+    {
+    case 0:
+        d->hrm_ptr = d->pars.g1h + 0x130;
+        d->free_list_ptr = d->hrm_ptr + 0xb0;
+        d->from_head = ((d->heap_region_type & 0x2) == 0);
+        d->new_alloc_region = 0;
+
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:0] start heap_region_type=%x "
+                            "node_index=%x hrm_ptr=%lx "
+                            "free_list_ptr=%lx from_head=%x\n",
+                            d->heap_region_type,
+                            d->node_index,
+                            d->hrm_ptr,
+                            d->free_list_ptr,
+                            d->from_head));
+
+        if (!hwgc_access(s, d->free_list_ptr + 0x10, &d->list_length, 8, false))
+            return;
+
+        if (!hwgc_access(s, d->free_list_ptr + 0x28, &d->list_head_ptr, 8, false))
+            return;
+
+        if (!hwgc_access(s, d->free_list_ptr + 0x30, &d->list_end_ptr, 8, false))
+            return;
+
+        if (!hwgc_access(s, d->free_list_ptr + 0x38, &d->list_last_ptr, 8, false))
+            return;
+
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:0] free list length=%lx "
+                            "head=%lx end=%lx last=%lx\n",
+                            d->list_length,
+                            d->list_head_ptr,
+                            d->list_end_ptr,
+                            d->list_last_ptr));
+
+        if (d->list_length == 0)
+        {
+            d->new_alloc_region = 0;
+
+            IFDEF(TRACE, printf("[ALLOC_FREE_REGION:0] free list empty, return 0\n"));
+
+            hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, d->alloc_free_sel ? 3 : 1);
+            return;
+        }
+
+        s->sub_stage = 1;
+        break;
+
+    case 1:
+    {
+        if (d->from_head)
+            d->new_alloc_region = d->list_head_ptr;
+        else
+            d->new_alloc_region = d->list_end_ptr;
+
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:1] select res=%lx from_%s\n", d->new_alloc_region, d->from_head ? "head" : "end"));
+
+        uintptr_t addr = d->new_alloc_region + (d->from_head ? 0xd0 : 0xd8);
+
+        if (!hwgc_access(s, addr, &d->res_conf, 8, false))
+            return;
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:1] access %lx (%x bytes) to get %lx\n", addr, 8, d->res_conf));
+
+        addr = d->free_list_ptr + (d->from_head ? 0x28 : 0x30);
+
+        if (!hwgc_access(s, addr,
+                         &d->res_conf, 8, true))
+            return;
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:1] access %lx (%x bytes) to write %lx\n",
+                            addr, 8,
+                            d->res_conf));
+
+        s->sub_stage = 2;
+        break;
+    }
+
+    case 2:
+        if (d->res_conf == 0)
+        {
+            uintptr_t zero = 0;
+
+            uintptr_t addr = d->free_list_ptr + (d->from_head ? 0x30 : 0x28);
+
+            if (!hwgc_access(s, addr, &zero, 8, true))
+                return;
+            IFDEF(TRACE, printf("[ALLOC_FREE_REGION:2] access %lx (%x bytes) to write %lx\n",
+                                addr, 8,
+                                zero));
+        }
+        else
+        {
+            uintptr_t zero = 0;
+
+            uintptr_t addr = d->res_conf + (d->from_head ? 0xd8 : 0xd0);
+
+            if (!hwgc_access(s, addr, &zero, 8, true))
+                return;
+            IFDEF(TRACE, printf("[ALLOC_FREE_REGION:2] access %lx (%x bytes) to write %lx\n",
+                                addr, 8,
+                                zero));
+        }
+
+        s->sub_stage = 3;
+        break;
+
+    case 3:
+    {
+        uintptr_t zero = 0;
+        uintptr_t addr = d->new_alloc_region + (d->from_head ? 0xd0 : 0xd8);
+
+        if (!hwgc_access(s, addr, &zero, 8, true))
+            return;
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:3] access %lx (%x bytes) to write %lx\n",
+                            addr, 8,
+                            zero));
+
+        s->sub_stage = 4;
+        break;
+    }
+
+    case 4:
+        if (d->new_alloc_region == 0)
+        {
+            IFDEF(TRACE, printf("[ALLOC_FREE_REGION:4] res is null, skip list update\n"));
+
+            hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, d->alloc_free_sel ? 3 : 1);
+            return;
+        }
+
+        if (d->list_last_ptr == d->new_alloc_region)
+        {
+            uintptr_t zero = 0;
+
+            if (!hwgc_access(s, d->free_list_ptr + 0x38, &zero, 8, true))
+                return;
+            IFDEF(TRACE, printf("[ALLOC_FREE_REGION:4] access %lx (%x bytes) to write %lx\n",
+                                d->free_list_ptr + 0x38, 8,
+                                zero));
+        }
+
+        s->sub_stage = 5;
+        break;
+
+    case 5:
+        uintptr_t writeValue = d->list_length - 1;
+        if (!hwgc_access(s, d->free_list_ptr + 0x10, &writeValue, 8, true))
+            return;
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:5] access %lx (%x bytes) to write %lx\n",
+                            d->free_list_ptr + 0x10, 8, writeValue));
+
+        hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, d->alloc_free_sel ? 3 : 1);
+        break;
+
+    default:
+        break;
+    }
 }
 
 static void stage_par_allocate_iml_function(HWGCDevState *s)
@@ -2559,7 +2947,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
             IFDEF(TRACE, printf("[PAR_ALLOCATE:9] "
                                 "goto ATTEMPT_ALLOC:17\n"));
 
-            hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 10);
+            hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 9);
         }
         else if (d->par_alloc_sel == 1)
         {
@@ -3085,6 +3473,7 @@ static void stage_do_oop_work_function(HWGCDevState *s)
                             "region_attr_addr=%lx\n",
                             d->heap_oop, region_attr_addr));
 
+        d->region_attr_ptr = 0;
         if (!hwgc_access(s, region_attr_addr,
                          &d->region_attr_ptr, 2, false))
             return;
@@ -3588,17 +3977,26 @@ static void do_hwgc_work(void *opaque)
         qemu_mutex_unlock(&s->lock);
         break;
 
-        //    case STAGE_ATTEMPT_ALLOC:
-        //        stage_attempt_alloc_function(s);
-        //        break;
-        //
-        //    case STAGE_NEW_GC_ALLOC:
-        //        stage_new_gc_alloc_function(s);
-        //        break;
-        //
-        //    case STAGE_ALLOC_FREE_REGION:
-        //        stage_alloc_free_region_function(s);
-        //        break;
+    case STAGE_ATTEMPT_ALLOC:
+        qemu_mutex_lock(&s->lock);
+        stage_attempt_alloc_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
+        break;
+
+    case STAGE_NEW_GC_ALLOC:
+        qemu_mutex_lock(&s->lock);
+        stage_new_gc_alloc_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
+        break;
+
+    case STAGE_ALLOCATE_FREE:
+        qemu_mutex_lock(&s->lock);
+        stage_alloc_free_region_function(s);
+        hwgc_arm_timer(s);
+        qemu_mutex_unlock(&s->lock);
+        break;
 
     case STAGE_COPY:
         qemu_mutex_lock(&s->lock);
@@ -3790,9 +4188,11 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
 
     if (addr == REG_IRQ_CLEAR && size == 4)
     {
-        IFDEF(TRACE, printf("[hwgc] IRQ clear: value=0x%08" PRIx64 "\n",
-                            val & UINT64_C(0xffffffff)));
-
+        if (val != 1)
+        {
+            IFDEF(IRQDEBUG, printf("[hwgc] IRQ clear: value=0x%08" PRIx64 "\n",
+                                   val & UINT64_C(0xffffffff)));
+        }
         hwgc_lower_irq_from_mmio(s, val);
         return;
     }
@@ -3844,10 +4244,16 @@ static void hwgc_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned si
                     s->sub_stage = s->irq_to_sub_stage;
                     qatomic_and(&s->status, ~ST_WAIT_ALLOCATE);
                 }
-                else if (s->status & ST_WAIT_WAKE)
+                else if (s->status & ST_WAIT_WAKE || s->status & ST_WAIT_GROW)
                 {
                     s->sub_stage = s->irq_to_sub_stage;
                     qatomic_and(&s->status, ~ST_WAIT_WAKE);
+                }
+                else if (s->status & ST_WAIT_EXPAND)
+                {
+                    s->sub_stage = s->irq_to_sub_stage;
+                    s->stageData.region_attr_ptr = s->irq_res0;
+                    qatomic_and(&s->status, ~ST_WAIT_EXPAND);
                 }
 
                 s->timer_running = true;

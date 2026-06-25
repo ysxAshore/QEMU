@@ -9,11 +9,13 @@
 #include "system/address-spaces.h"
 
 #define TRACE 1
-#define IFDEF(cond, stmt) \
-    if (cond)             \
-        do                \
-        {                 \
-            stmt;         \
+#define IRQDEBUG 1
+#define IFDEF(cond, stmt)           \
+    if (cond)                       \
+        do                          \
+        {                           \
+            printf("[HWGC %p]", s); \
+            stmt;                   \
         } while (0);
 
 #define TYPE_HWGC_DEV "hwgc"
@@ -85,7 +87,7 @@ DECLARE_INSTANCE_CHECKER(HWGCDevState, HWGC_DEV, TYPE_HWGC_DEV)
 /* IRQ bits*/
 #define IRQ_TLB_MISS 0x1
 #define IRQ_DONE 0x2
-#define IRQ_GORW 0x4
+#define IRQ_GROW 0x4
 #define IRQ_EXPAND 0x8
 #define IRQ_ALLOCATE 0x10
 #define IRQ_WAKE 0x20
@@ -197,14 +199,10 @@ struct HWGCStageData
     uintptr_t src;
     uintptr_t dest;
 
-    uint32_t array_localBot;
-
     uintptr_t common_m_value;
     uintptr_t src_region_attr_ptr;
     uint16_t src_region_attr;
-    uintptr_t originValue;
     uintptr_t offset;
-    uint16_t region_attr;
     uintptr_t region_attr_ptr;
 
     uintptr_t klass_ptr;
@@ -213,14 +211,12 @@ struct HWGCStageData
     int kid;
     int common_oop_array_length;
 
-    uint16_t copy2survivor_region_attr;
     uint16_t age;
     uint32_t dest_attr_cache;
     uint16_t dest_attr;
 
     uintptr_t dest_attr_ptr;
     uintptr_t monitor_markWord;
-    uintptr_t from_region;
 
     uintptr_t buffer_temp;
     uintptr_t buffer;
@@ -229,15 +225,9 @@ struct HWGCStageData
     uintptr_t region_bottom;
     uintptr_t region_hard_end;
 
-    uintptr_t new_mark;
-    uintptr_t writeSrcMW;
     uintptr_t forward_ptr;
 
-    int8_t dest_attr_type;
-
-    uintptr_t plab_stats_ptr;
     uintptr_t allocator_ptr;
-    uintptr_t alloc_klass_ptr;
 
     size_t plab_word_size;
     size_t required_in_plab;
@@ -250,10 +240,7 @@ struct HWGCStageData
     uintptr_t region_ptr;
     uintptr_t alloc_region;
 
-    uintptr_t card_table_ptr;
     uintptr_t byte_map_base;
-    uintptr_t first;
-    uintptr_t last;
 
     uintptr_t remaining;
     uintptr_t offset30;
@@ -277,10 +264,8 @@ struct HWGCStageData
     uintptr_t begin;
 
     size_t index;
-    size_t start_card_for_region;
     size_t start_card;
     size_t end_card;
-    size_t reach;
 
     int end;
     int vtable_len;
@@ -299,12 +284,10 @@ struct HWGCStageData
     size_t last_index;
 
     uintptr_t node_allocator_ptr;
-    uintptr_t node;
     uintptr_t old_node;
     uintptr_t new_top;
 
     uint16_t aop_region_attr;
-    uintptr_t aop_region_attr_ptr;
     uintptr_t aop_dest;
 
     int8_t region_ptr_type;
@@ -315,7 +298,25 @@ struct HWGCStageData
     uintptr_t root_regions_array;
     uintptr_t root_regions_idx;
 
+    uint node_index;
+    uint grow_array_len;
+    uint grow_array_max;
+    uintptr_t data_ptr;
+    uintptr_t remset_ptr;
+    uintptr_t grow_array_ptr;
     uintptr_t new_alloc_region;
+    uintptr_t region_attr_base;
+
+    bool alloc_free_sel;
+    uintptr_t hrm_ptr;
+    uintptr_t free_list_ptr;
+    bool from_head;
+
+    uintptr_t list_length;
+    uintptr_t list_head_ptr;
+    uintptr_t list_end_ptr;
+    uintptr_t list_last_ptr;
+    uintptr_t res_conf;
 };
 
 struct HWGCDevState
