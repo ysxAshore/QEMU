@@ -2305,9 +2305,6 @@ static void stage_new_gc_alloc_function(HWGCDevState *s)
     case 5:
         if (!hwgc_access(s, d->grow_array_ptr, &d->region_attr_ptr, 8, false))
             return;
-        if (!hwgc_access(s, d->grow_array_ptr + 0x8, &d->data_ptr, 8, false))
-            return;
-
         d->grow_array_len = (uint)d->region_attr_ptr;
         d->grow_array_max = (uint)(d->region_attr_ptr >> 32);
 
@@ -2338,6 +2335,10 @@ static void stage_new_gc_alloc_function(HWGCDevState *s)
         d->region_attr_ptr = d->grow_array_len + 1;
 
         if (!hwgc_access(s, d->grow_array_ptr, &d->region_attr_ptr, 4, true))
+            return;
+
+        // @notice: 这里不能一起读, 可能grow会换新的
+        if (!hwgc_access(s, d->grow_array_ptr + 0x8, &d->data_ptr, 8, false))
             return;
         IFDEF(TRACE, printf("[NEW_GC_ALLOC:6] access %lx (%x bytes) to write %lx\n",
                             d->grow_array_ptr, 4,
@@ -2433,7 +2434,7 @@ static void stage_alloc_free_region_function(HWGCDevState *s)
                             d->free_list_ptr,
                             d->from_head));
 
-        if (!hwgc_access(s, d->free_list_ptr + 0x10, &d->list_length, 8, false))
+        if (!hwgc_access(s, d->free_list_ptr + 0x10, &d->list_length, 4, false))
             return;
 
         if (!hwgc_access(s, d->free_list_ptr + 0x28, &d->list_head_ptr, 8, false))
@@ -2445,7 +2446,7 @@ static void stage_alloc_free_region_function(HWGCDevState *s)
         if (!hwgc_access(s, d->free_list_ptr + 0x38, &d->list_last_ptr, 8, false))
             return;
 
-        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:0] free list length=%lx "
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:0] free list length=%x "
                             "head=%lx end=%lx last=%lx\n",
                             d->list_length,
                             d->list_head_ptr,
@@ -2561,8 +2562,8 @@ static void stage_alloc_free_region_function(HWGCDevState *s)
         break;
 
     case 5:
-        uintptr_t writeValue = d->list_length - 1;
-        if (!hwgc_access(s, d->free_list_ptr + 0x10, &writeValue, 8, true))
+        uint writeValue = d->list_length - 1;
+        if (!hwgc_access(s, d->free_list_ptr + 0x10, &writeValue, 4, true))
             return;
         IFDEF(TRACE, printf("[ALLOC_FREE_REGION:5] access %lx (%x bytes) to write %lx\n",
                             d->free_list_ptr + 0x10, 8, writeValue));

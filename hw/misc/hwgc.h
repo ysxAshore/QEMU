@@ -312,7 +312,7 @@ struct HWGCStageData
     uintptr_t free_list_ptr;
     bool from_head;
 
-    uintptr_t list_length;
+    uint list_length;
     uintptr_t list_head_ptr;
     uintptr_t list_end_ptr;
     uintptr_t list_last_ptr;
