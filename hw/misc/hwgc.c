@@ -276,8 +276,7 @@ static void stage_partial_array_function(HWGCDevState *s)
             return;
 
         d->to_obj = d->partial_m_value & ~0x3;
-        uintptr_t from_len_addr = d->from_obj +
-                                  (d->pars.useCompressedKlassPointers ? 12 : 16);
+        uintptr_t from_len_addr = d->from_obj + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
         if (!hwgc_access(s, from_len_addr, &d->partial_from_length, 4, false))
             return;
@@ -293,8 +292,7 @@ static void stage_partial_array_function(HWGCDevState *s)
     case 1:
     {
         int temp;
-        uintptr_t to_len_addr = d->to_obj +
-                                (d->pars.useCompressedKlassPointers ? 12 : 16);
+        uintptr_t to_len_addr = d->to_obj + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
         if (!hwgc_access(s, to_len_addr, &d->start, 4, false))
             return;
@@ -315,16 +313,13 @@ static void stage_partial_array_function(HWGCDevState *s)
     case 2:
     {
         uint32_t task_num = d->start / d->pars.chunkSize;
-        uint32_t remaining_tasks =
-            (d->partial_from_length - d->start) / d->pars.chunkSize;
+        uint32_t remaining_tasks = (d->partial_from_length - d->start) / d->pars.chunkSize;
         uint32_t task_limit = (uint32_t)d->pars.stepperOffset;
         uint32_t task_fanout = d->pars.stepperOffset >> 32;
         uint32_t max_pending = (task_fanout - 1) * task_num + 1;
-        uint32_t pending =
-            MIN(max_pending, MIN(remaining_tasks, task_limit));
+        uint32_t pending = MIN(max_pending, MIN(remaining_tasks, task_limit));
 
-        d->ncreate = MIN(task_fanout,
-                         MIN(remaining_tasks, task_limit + 1) - pending);
+        d->ncreate = MIN(task_fanout, MIN(remaining_tasks, task_limit + 1) - pending);
         d->i = 0;
 
         IFDEF(TRACE, printf("[PARTIAL_ARRAY:2] start=%u src_len=%u task_num=%u "
@@ -351,8 +346,7 @@ static void stage_partial_array_function(HWGCDevState *s)
         }
 
         uintptr_t pushData = d->from_obj + 0x2;
-        uintptr_t queue_addr =
-            d->pars.taskQueueElemsBase + d->localBot * 8;
+        uintptr_t queue_addr = d->pars.taskQueueElemsBase + d->localBot * 8;
 
         IFDEF(TRACE, printf("[PARTIAL_ARRAY:3] push task=%lx queue[%u]=%lx\n",
                             pushData, d->localBot, queue_addr));
@@ -370,8 +364,7 @@ static void stage_partial_array_function(HWGCDevState *s)
 
     case 4:
     {
-        uintptr_t heap_region_ptr = d->pars.heapRegionBiasedBase +
-                                    (d->to_obj >> d->pars.heapRegionShiftBy) * 8;
+        uintptr_t heap_region_ptr = d->pars.heapRegionBiasedBase + (d->to_obj >> d->pars.heapRegionShiftBy) * 8;
 
         IFDEF(TRACE, printf("[PARTIAL_ARRAY:4] lookup region, to=%lx region_ptr=%lx\n",
                             d->to_obj, heap_region_ptr));
@@ -387,8 +380,7 @@ static void stage_partial_array_function(HWGCDevState *s)
     }
 
     case 5:
-        if (!hwgc_access(s, d->heap_region + 0xbc,
-                         &d->heap_region_type, 4, false))
+        if (!hwgc_access(s, d->heap_region + 0xbc, &d->heap_region_type, 4, false))
             return;
 
         IFDEF(TRACE, printf("[PARTIAL_ARRAY:5] region_type=0x%x\n",
@@ -402,16 +394,13 @@ static void stage_partial_array_function(HWGCDevState *s)
         d->scanning_in_young = (d->heap_region_type & 0x2) != 0;
 
         size_t oop_size = d->pars.useCompressedOops ? 4 : 8;
-        uintptr_t base = d->to_obj +
-                         (d->pars.useCompressedKlassPointers ? 16 : 24);
+        uintptr_t base = d->to_obj + (d->pars.useCompressedKlassPointers ? 16 : 24);
 
         uintptr_t low = base + d->start * oop_size;
-        uintptr_t high = base +
-                         (d->start + d->pars.chunkSize) * oop_size;
+        uintptr_t high = base + (d->start + d->pars.chunkSize) * oop_size;
 
         d->p = base;
-        d->q = base +
-               (d->start + d->pars.chunkSize) * oop_size;
+        d->q = base + (d->start + d->pars.chunkSize) * oop_size;
 
         if (d->p < low)
             d->p = low;
@@ -474,12 +463,7 @@ static void stage_oop_function(HWGCDevState *s)
         if (d->pars.useCompressedOops)
         {
             uint32_t narrow_oop = (uint32_t)d->offset;
-
-            if (narrow_oop == 0)
-                d->from_obj = 0;
-            else
-                d->from_obj = (uintptr_t)d->pars.compressedOopBase +
-                              ((uintptr_t)narrow_oop << d->pars.compressedOopShift);
+            d->from_obj = (uintptr_t)d->pars.compressedOopBase + ((uintptr_t)narrow_oop << d->pars.compressedOopShift);
 
             IFDEF(TRACE, printf("[COMMON_OOP:1] compressed oop=%x -> from=%lx "
                                 "base=%lx shift=%u\n",
@@ -505,8 +489,7 @@ static void stage_oop_function(HWGCDevState *s)
         break;
 
     case 2:
-        d->region_attr_ptr = d->pars.regionAttrBiasedBase +
-                             (d->from_obj >> d->pars.regionAttrShiftBy) * 2;
+        d->region_attr_ptr = d->pars.regionAttrBiasedBase + (d->from_obj >> d->pars.regionAttrShiftBy) * 2;
 
         IFDEF(TRACE, printf("[COMMON_OOP:2] from=%lx region_attr_ptr=%lx\n",
                             d->from_obj, d->region_attr_ptr));
@@ -585,13 +568,6 @@ static void stage_oop_function(HWGCDevState *s)
 
     case 5:
     {
-        uintptr_t heap_region_ptr;
-        uintptr_t task_region = d->task >> d->pars.logOfHRGrainBytes;
-        uintptr_t to_region = d->to_obj >> d->pars.logOfHRGrainBytes;
-
-        IFDEF(TRACE, printf("[COMMON_OOP:5] task_region=%lx to_region=%lx\n",
-                            task_region, to_region));
-
         if (((d->task ^ d->to_obj) >> d->pars.logOfHRGrainBytes) == 0)
         {
             IFDEF(TRACE, printf("[COMMON_OOP:5] same region, goto FETCH\n"));
@@ -599,8 +575,7 @@ static void stage_oop_function(HWGCDevState *s)
             return;
         }
 
-        heap_region_ptr = d->pars.heapRegionBiasedBase +
-                          (d->task >> d->pars.heapRegionShiftBy) * 8;
+        uintptr_t heap_region_ptr = d->pars.heapRegionBiasedBase + (d->task >> d->pars.heapRegionShiftBy) * 8;
 
         IFDEF(TRACE, printf("[COMMON_OOP:5] heap_region_ptr=%lx\n",
                             heap_region_ptr));
@@ -617,10 +592,7 @@ static void stage_oop_function(HWGCDevState *s)
 
     case 6:
     {
-        uintptr_t attr_ptr;
-
-        if (!hwgc_access(s, d->heap_region + 0xbc,
-                         &d->heap_region_type, 4, false))
+        if (!hwgc_access(s, d->heap_region + 0xbc, &d->heap_region_type, 4, false))
             return;
 
         IFDEF(TRACE, printf("[COMMON_OOP:6] heap_region_type=0x%x\n",
@@ -634,10 +606,9 @@ static void stage_oop_function(HWGCDevState *s)
             return;
         }
 
-        attr_ptr = d->pars.regionAttrBiasedBase +
-                   (d->to_obj >> d->pars.regionAttrShiftBy) * 2;
+        d->region_attr_ptr = d->pars.regionAttrBiasedBase + (d->to_obj >> d->pars.regionAttrShiftBy) * 2;
 
-        if (!hwgc_access(s, attr_ptr, &d->aop_region_attr, 2, false))
+        if (!hwgc_access(s, d->region_attr_ptr, &d->aop_region_attr, 2, false))
             return;
 
         d->aop_dest = d->task;
@@ -645,7 +616,7 @@ static void stage_oop_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[COMMON_OOP:6] AOP: dest_slot=%lx to=%lx "
                             "attr_ptr=%lx attr=0x%x\n",
                             d->aop_dest, d->to_obj,
-                            attr_ptr, d->aop_region_attr));
+                            d->region_attr_ptr, d->aop_region_attr));
 
         d->previous = STAGE_FETCH;
         d->previous_sub_stage = 0;
@@ -724,15 +695,12 @@ static void stage_copy2survivor_function(HWGCDevState *s)
         }
         else if (d->lh < 0)
         {
-            uintptr_t len_addr = d->from_obj +
-                                 (d->pars.useCompressedKlassPointers ? 12 : 16);
+            uintptr_t len_addr = d->from_obj + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
-            if (!hwgc_access(s, len_addr,
-                             &d->common_oop_array_length, 4, false))
+            if (!hwgc_access(s, len_addr, &d->common_oop_array_length, 4, false))
                 return;
 
-            size_t temp = ((size_t)d->common_oop_array_length << (uint8_t)d->lh) +
-                          (uint8_t)(d->lh >> 16);
+            size_t temp = ((size_t)d->common_oop_array_length << (uint8_t)d->lh) + (uint8_t)(d->lh >> 16);
 
             d->size = (temp & 0x7) ? ((temp >> 3) + 1) : (temp >> 3);
 
@@ -744,13 +712,12 @@ static void stage_copy2survivor_function(HWGCDevState *s)
             if (d->kid == 2)
             {
                 uint oop_size_offset = d->pars.useCompressedKlassPointers ? 0x20 : 0x24;
-                if (!hwgc_access(s, d->from_obj + oop_size_offset, &d->size, 8, false))
+                d->size = 0;
+                if (!hwgc_access(s, d->from_obj + oop_size_offset, &d->size, 4, false))
                     return;
             }
             else
-            {
                 d->size = (size_t)d->lh >> 3;
-            }
         }
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:2] lh=%d kid=%d size=%zu words\n",
@@ -762,12 +729,10 @@ static void stage_copy2survivor_function(HWGCDevState *s)
 
     case 3:
     {
-        if (!hwgc_access(s, d->pars.pss + 0x178,
-                         &d->dest_attr_cache, 4, false))
+        if (!hwgc_access(s, d->pars.pss + 0x178, &d->dest_attr_cache, 4, false))
             return;
 
         d->dest_attr = src_region_attr_type == 1 ? d->dest_attr_cache >> 16 : d->dest_attr_cache & 0xffff;
-
         d->dest_attr_ptr = src_region_attr_type == 1 ? d->pars.pss + 0x178 + 0x2 : d->pars.pss + 0x178;
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:3] attr_cache=0x%x dest_attr=0x%x "
@@ -831,8 +796,7 @@ static void stage_copy2survivor_function(HWGCDevState *s)
     case 5:
     {
         int8_t dest_attr_type = (int8_t)(d->dest_attr >> 8);
-        uintptr_t allocator_addr = d->pars.plabAllocatorPtr +
-                                   0x10 + dest_attr_type * 8;
+        uintptr_t allocator_addr = d->pars.plabAllocatorPtr + 0x10 + dest_attr_type * 8;
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:5] dest_type=%d "
                             "allocator_slot=%lx\n",
@@ -873,9 +837,8 @@ static void stage_copy2survivor_function(HWGCDevState *s)
     {
         if ((d->region_end - d->region_top) / 8 >= d->size)
         {
-            uintptr_t writeValue = d->region_top + d->size * 8;
-
             d->to_obj = d->region_top;
+            uintptr_t writeValue = d->to_obj + d->size * 8;
 
             IFDEF(TRACE, printf("[COPY2SURVIVOR:7] PLAB allocate "
                                 "to=%lx size=%zu old_top=%lx new_top=%lx\n",
@@ -911,8 +874,7 @@ static void stage_copy2survivor_function(HWGCDevState *s)
                             "updated=%lx\n",
                             d->from_obj, d->common_m_value, updatedMW));
 
-        if (!hwgc_cmpxchg(s, d->from_obj, d->common_m_value,
-                          updatedMW, 8, &return_value))
+        if (!hwgc_cmpxchg(s, d->from_obj, d->common_m_value, updatedMW, 8, &return_value))
             return;
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:8] CAS returned=%lx %s\n",
@@ -936,14 +898,8 @@ static void stage_copy2survivor_function(HWGCDevState *s)
     {
         uintptr_t new_mark = d->common_m_value;
 
-        if ((int8_t)(d->dest_attr >> 8) == 0 &&
-            (d->common_m_value & 0x1) != 0)
-        {
-            new_mark = (d->common_m_value & ~(0x1111 << 3)) |
-                       ((((d->age + 1) < 15 ? d->age + 1 : d->age) &
-                         0x1111)
-                        << 3);
-        }
+        if ((int8_t)(d->dest_attr >> 8) == 0 && (d->common_m_value & 0x1) != 0)
+            new_mark = (d->common_m_value & ~(0x1111 << 3)) | ((((d->age + 1) < 15 ? d->age + 1 : d->age) & 0x1111) << 3);
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:9] init new object "
                             "to=%lx mark=%lx\n",
@@ -958,18 +914,14 @@ static void stage_copy2survivor_function(HWGCDevState *s)
 
     case 10:
     {
-        if ((int8_t)(d->dest_attr >> 8) == 0 &&
-            (d->common_m_value & 0x1) == 0)
+        if ((int8_t)(d->dest_attr >> 8) == 0 && (d->common_m_value & 0x1) == 0)
         {
             uintptr_t ptr = (d->common_m_value & 0x2) ? (d->common_m_value ^ 0x2) : d->common_m_value;
 
             if (!hwgc_access(s, ptr, &d->region_attr_ptr, 8, false))
                 return;
 
-            d->region_attr_ptr = (d->region_attr_ptr & ~(0x1111 << 3)) |
-                                 ((((d->age + 1) < 15 ? d->age + 1 : d->age) &
-                                   0x1111)
-                                  << 3);
+            d->region_attr_ptr = (d->region_attr_ptr & ~(0x1111 << 3)) | ((((d->age + 1) < 15 ? d->age + 1 : d->age) & 0x1111) << 3);
 
             IFDEF(TRACE, printf("[COPY2SURVIVOR:10] update monitor=%lx "
                                 "new_mark=%lx\n",
@@ -1013,12 +965,10 @@ static void stage_copy2survivor_function(HWGCDevState *s)
 
     case 13:
     {
-        if (!hwgc_access(s, d->buffer + 0x28,
-                         &d->region_bottom, 8, false))
+        if (!hwgc_access(s, d->buffer + 0x28, &d->region_bottom, 8, false))
             return;
 
-        if (!hwgc_access(s, d->buffer + 0x40,
-                         &d->region_hard_end, 8, false))
+        if (!hwgc_access(s, d->buffer + 0x40, &d->region_hard_end, 8, false))
             return;
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:13] lost CAS, forward=%lx "
@@ -1026,8 +976,7 @@ static void stage_copy2survivor_function(HWGCDevState *s)
                             d->forward_ptr, d->to_obj,
                             d->region_bottom, d->region_hard_end));
 
-        if (d->to_obj >= d->region_bottom &&
-            d->to_obj < d->region_hard_end)
+        if (d->to_obj >= d->region_bottom && d->to_obj < d->region_hard_end)
         {
             IFDEF(TRACE, printf("[COPY2SURVIVOR:13] reclaim allocation, "
                                 "restore top=%lx\n",
@@ -1054,16 +1003,14 @@ static void stage_copy2survivor_function(HWGCDevState *s)
     {
         uint words = d->size / 8;
         uintptr_t cur_klass = 0;
-        uint header_words =
-            d->pars.useCompressedKlassPointers ? 2 : 3;
+        uint header_words = d->pars.useCompressedKlassPointers ? 2 : 3;
 
         if (words >= header_words)
         {
             uint payload_size = words - header_words;
             uint32_t len = payload_size * 2;
 
-            uintptr_t array_len_addr = d->to_obj +
-                                       (d->pars.useCompressedKlassPointers ? 12 : 16);
+            uintptr_t array_len_addr = d->to_obj + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
             IFDEF(TRACE, printf("[COPY2SURVIVOR:14] filler int[] "
                                 "to=%lx words=%u len=%u len_addr=%lx\n",
@@ -1075,9 +1022,7 @@ static void stage_copy2survivor_function(HWGCDevState *s)
             cur_klass = d->pars.intArrayKlassObj;
         }
         else if (words > 0)
-        {
             cur_klass = d->pars.objectKlass;
-        }
 
         IFDEF(TRACE, printf("[COPY2SURVIVOR:14] filler to=%lx words=%u "
                             "klass=%lx forward_to=%lx\n",
@@ -1089,11 +1034,9 @@ static void stage_copy2survivor_function(HWGCDevState *s)
 
         if (d->pars.useCompressedKlassPointers)
         {
-            uint32_t narrow_klass = (uint32_t)((cur_klass - s->stageData.pars.compressedKlassPointerBase) >>
-                                               s->stageData.pars.compressedKlassPointerShift);
+            uint32_t narrow_klass = (uint32_t)((cur_klass - s->stageData.pars.compressedKlassPointerBase) >> s->stageData.pars.compressedKlassPointerShift);
 
-            if (!hwgc_access(s, d->to_obj + 0x8,
-                             &narrow_klass, 4, true))
+            if (!hwgc_access(s, d->to_obj + 0x8, &narrow_klass, 4, true))
                 return;
         }
         else
@@ -1152,8 +1095,7 @@ static void stage_alloc_function(HWGCDevState *s)
                                 "read old PLAB slot=%lx\n",
                                 d->pars.plabAllocatorPtr + 0x18));
 
-            if (!hwgc_access(s, d->pars.plabAllocatorPtr + 0x18,
-                             &d->buffer_temp, 8, false))
+            if (!hwgc_access(s, d->pars.plabAllocatorPtr + 0x18, &d->buffer_temp, 8, false))
                 return;
 
             IFDEF(TRACE, printf("[ALLOC:1] old PLAB holder=%lx\n",
@@ -1177,12 +1119,10 @@ static void stage_alloc_function(HWGCDevState *s)
         if (!hwgc_access(s, d->buffer_temp, &d->buffer, 8, false))
             return;
 
-        if (!hwgc_access(s, d->buffer + 0x30,
-                         &d->region_top, 8, false))
+        if (!hwgc_access(s, d->buffer + 0x30, &d->region_top, 8, false))
             return;
 
-        if (!hwgc_access(s, d->buffer + 0x38,
-                         &d->region_end, 8, false))
+        if (!hwgc_access(s, d->buffer + 0x38, &d->region_end, 8, false))
             return;
 
         IFDEF(TRACE, printf("[ALLOC:2] old PLAB buffer=%lx top=%lx "
@@ -1196,19 +1136,16 @@ static void stage_alloc_function(HWGCDevState *s)
 
     case 3:
     {
-        uintptr_t write_top;
-
         d->dest_attr = (d->dest_attr & 0x00ff) | 0x0100;
 
         IFDEF(TRACE, printf("[ALLOC:3] set dest_attr=0x%x, "
                             "need=%zu words\n",
                             d->dest_attr, d->size));
 
-        if (d->region_end >= d->region_top &&
-            (d->region_end - d->region_top) / 8 >= d->size)
+        if (d->region_end >= d->region_top && (d->region_end - d->region_top) / 8 >= d->size)
         {
             d->to_obj = d->region_top;
-            write_top = d->region_top + d->size * 8;
+            uintptr_t write_top = d->to_obj + d->size * 8;
 
             IFDEF(TRACE, printf("[ALLOC:3] allocate from old PLAB: "
                                 "to=%lx old_top=%lx new_top=%lx\n",
@@ -1246,8 +1183,7 @@ static void stage_alloc_function(HWGCDevState *s)
                                 "flag addr=%lx\n",
                                 d->pars.pss + 0x17c));
 
-            if (!hwgc_access(s, d->pars.pss + 0x17c,
-                             &refill_failed_value, 4, true))
+            if (!hwgc_access(s, d->pars.pss + 0x17c, &refill_failed_value, 4, true))
                 return;
         }
 
@@ -1255,8 +1191,7 @@ static void stage_alloc_function(HWGCDevState *s)
                             "flag addr=%lx value=%u\n",
                             d->dest_attr_ptr + 1, destination_full));
 
-        if (!hwgc_access(s, d->dest_attr_ptr + 1,
-                         &destination_full, 1, true))
+        if (!hwgc_access(s, d->dest_attr_ptr + 1, &destination_full, 1, true))
             return;
 
         s->sub_stage = 5;
@@ -1306,8 +1241,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
                             d->pars.g1h, plab_stats_ptr,
                             plab_stats_ptr + 0x30));
 
-        if (!hwgc_access(s, plab_stats_ptr + 0x30,
-                         &d->region_attr_ptr, 8, false))
+        if (!hwgc_access(s, plab_stats_ptr + 0x30, &d->region_attr_ptr, 8, false))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:0] raw_plab_word_size=%lx\n",
@@ -1321,8 +1255,8 @@ static void stage_allocate_direct_function(HWGCDevState *s)
 
     case 1:
     {
-        d->plab_word_size =
-            MIN(MAX(d->region_attr_ptr, 0x102), 0x40000);
+        // @notice: 这里的*(uintptr_t *)(plab_statss_ptr + 0x30) 需要除以_num_workers
+        d->plab_word_size = MIN(MAX(d->region_attr_ptr / 2, 0x102), 0x40000);
         d->required_in_plab = d->size + 0x2;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:1] plab_word_size=%zu "
@@ -1330,8 +1264,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
                             d->plab_word_size, d->required_in_plab,
                             d->size));
 
-        if (!hwgc_access(s, d->pars.plabAllocatorPtr + 0x8,
-                         &d->allocator_ptr, 8, false))
+        if (!hwgc_access(s, d->pars.plabAllocatorPtr + 0x8, &d->allocator_ptr, 8, false))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:1] allocator_ptr=%lx\n",
@@ -1343,19 +1276,16 @@ static void stage_allocate_direct_function(HWGCDevState *s)
 
     case 2:
     {
-        bool may_throw_away_buffer =
-            d->required_in_plab * 100 < d->plab_word_size * 0xa;
+        bool may_throw_away_buffer = d->required_in_plab * 100 < d->plab_word_size * 0xa;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:2] required=%zu desired=%zu "
                             "may_discard=%d\n",
                             d->required_in_plab, d->plab_word_size,
                             may_throw_away_buffer));
 
-        if (d->required_in_plab <= d->plab_word_size &&
-            may_throw_away_buffer)
+        if (d->required_in_plab <= d->plab_word_size && may_throw_away_buffer)
         {
-            uintptr_t buffer_slot = d->pars.plabAllocatorPtr +
-                                    0x10 + dest_attr_type * 8;
+            uintptr_t buffer_slot = d->pars.plabAllocatorPtr + 0x10 + dest_attr_type * 8;
 
             IFDEF(TRACE, printf("[ALLOCATE_DIRECT:2] read current PLAB "
                                 "slot=%lx\n",
@@ -1386,8 +1316,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
         if (!hwgc_access(s, d->buffer + 0x30, &d->region_top, 8, false))
             return;
 
-        if (!hwgc_access(s, d->buffer + 0x40,
-                         &d->region_hard_end, 8, false))
+        if (!hwgc_access(s, d->buffer + 0x40, &d->region_hard_end, 8, false))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:3] old buffer=%lx "
@@ -1415,8 +1344,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
             {
                 uint payload_size = words - header_words;
                 uint32_t len = payload_size * 2;
-                uintptr_t array_len_addr = d->region_top +
-                                           (d->pars.useCompressedKlassPointers ? 12 : 16);
+                uintptr_t array_len_addr = d->region_top + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
                 IFDEF(TRACE, printf("[ALLOCATE_DIRECT:4] create filler int[] "
                                     "len=%u len_addr=%lx\n",
@@ -1441,25 +1369,19 @@ static void stage_allocate_direct_function(HWGCDevState *s)
 
             if (d->pars.useCompressedKlassPointers)
             {
-                uint32_t narrow_klass = (uint32_t)((cur_klass -
-                                                    s->stageData.pars.compressedKlassPointerBase) >>
-                                                   s->stageData.pars.compressedKlassPointerShift);
+                uint32_t narrow_klass = (uint32_t)((cur_klass - s->stageData.pars.compressedKlassPointerBase) >> s->stageData.pars.compressedKlassPointerShift);
 
-                if (!hwgc_access(s, d->region_top + 0x8,
-                                 &narrow_klass, 4, true))
+                if (!hwgc_access(s, d->region_top + 0x8, &narrow_klass, 4, true))
                     return;
             }
             else
             {
-                if (!hwgc_access(s, d->region_top + 0x8,
-                                 &cur_klass, 8, true))
+                if (!hwgc_access(s, d->region_top + 0x8, &cur_klass, 8, true))
                     return;
             }
         }
         else
-        {
             IFDEF(TRACE, printf("[ALLOCATE_DIRECT:4] old PLAB already empty\n"));
-        }
 
         s->sub_stage = 5;
         break;
@@ -1484,13 +1406,10 @@ static void stage_allocate_direct_function(HWGCDevState *s)
     {
         if (d->to_obj != 0)
         {
-            uintptr_t write30 =
-                (d->actual_plab_size - 2) >= d->size ? d->to_obj + d->size * 8 : d->to_obj;
+            uintptr_t write30 = (d->actual_plab_size - 2) >= d->size ? d->to_obj + d->size * 8 : d->to_obj;
 
-            uintptr_t write38 =
-                d->to_obj + (d->actual_plab_size - 2) * 8;
-            uintptr_t write40 =
-                d->to_obj + d->actual_plab_size * 8;
+            uintptr_t write38 = d->to_obj + (d->actual_plab_size - 2) * 8;
+            uintptr_t write40 = d->to_obj + d->actual_plab_size * 8;
             uintptr_t write48;
 
             if (!hwgc_access(s, d->buffer + 0x48, &write48, 8, false))
@@ -1504,8 +1423,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
                                 d->buffer, d->to_obj, d->actual_plab_size,
                                 d->to_obj, write30, write40, write48));
 
-            if (!hwgc_access(s, d->buffer + 0x20,
-                             &d->actual_plab_size, 8, true))
+            if (!hwgc_access(s, d->buffer + 0x20, &d->actual_plab_size, 8, true))
                 return;
             if (!hwgc_access(s, d->buffer + 0x28, &d->to_obj, 8, true))
                 return;
@@ -1532,14 +1450,11 @@ static void stage_allocate_direct_function(HWGCDevState *s)
                                 "retire remaining old PLAB [%lx, %lx)\n",
                                 d->region_top, d->region_hard_end));
 
-            if (!hwgc_access(s, d->buffer + 0x38,
-                             &d->region_hard_end, 8, true))
+            if (!hwgc_access(s, d->buffer + 0x38, &d->region_hard_end, 8, true))
                 return;
-            if (!hwgc_access(s, d->buffer + 0x30,
-                             &d->region_hard_end, 8, true))
+            if (!hwgc_access(s, d->buffer + 0x30, &d->region_hard_end, 8, true))
                 return;
-            if (!hwgc_access(s, d->buffer + 0x28,
-                             &d->region_hard_end, 8, true))
+            if (!hwgc_access(s, d->buffer + 0x28, &d->region_hard_end, 8, true))
                 return;
 
             d->plab_refill_failed = true;
@@ -1612,14 +1527,11 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                                 "region_ptr from allocator=%lx\n",
                                 d->allocator_ptr + 0x28));
 
-            if (!hwgc_access(s, d->allocator_ptr + 0x28,
-                             &d->region_ptr, 8, false))
+            if (!hwgc_access(s, d->allocator_ptr + 0x28, &d->region_ptr, 8, false))
                 return;
         }
         else
-        {
             d->region_ptr = d->allocator_ptr + 0x30;
-        }
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:0] region_ptr=%lx\n",
                             d->region_ptr));
@@ -1634,8 +1546,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                             "from=%lx\n",
                             d->region_ptr + 0x8));
 
-        if (!hwgc_access(s, d->region_ptr + 0x8,
-                         &d->alloc_region, 8, false))
+        if (!hwgc_access(s, d->region_ptr + 0x8, &d->alloc_region, 8, false))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:1] alloc_region=%lx\n",
@@ -1666,8 +1577,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                                 "addr=%lx expected=%u write=%u\n",
                                 lock_ptr + 8, expected, writed));
 
-            if (!hwgc_cmpxchg(s, lock_ptr + 8,
-                              expected, writed, 4, &get))
+            if (!hwgc_cmpxchg(s, lock_ptr + 8, expected, writed, 4, &get))
                 return;
 
             IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:2] old lock CAS "
@@ -1698,8 +1608,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                             "addr=%lx\n",
                             lock_ptr + 8));
 
-        if (!hwgc_cmpxchg(s, lock_ptr + 8,
-                          expected, writed, 4, &get))
+        if (!hwgc_cmpxchg(s, lock_ptr + 8, expected, writed, 4, &get))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:3] release result=%u\n",
@@ -1719,9 +1628,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
             break;
         }
         else
-        {
             s->sub_stage = 4;
-        }
         break;
     }
 
@@ -1734,8 +1641,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                                 d->allocator_ptr + 0x10));
 
             d->region_attr_ptr = 0;
-            if (!hwgc_access(s, d->allocator_ptr + 0x10,
-                             &d->region_attr_ptr, 1, false))
+            if (!hwgc_access(s, d->allocator_ptr + 0x10, &d->region_attr_ptr, 1, false))
                 return;
 
             IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:4] allocator flag=0x%lx\n",
@@ -1767,7 +1673,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
 
     case 6:
     {
-        bool is_full = dest_attr_type == 0 ? (d->region_attr_ptr & 0x1) != 0 : (d->region_attr_ptr & 0x2) != 0;
+        bool is_full = dest_attr_type == 0 ? d->region_attr_ptr & 0x1 : d->region_attr_ptr & 0x2;
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:6] allocator flag=0x%lx "
                             "dest_type=%d is_full=%d\n",
@@ -1794,8 +1700,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                                     "addr=%lx\n",
                                     lock_ptr + 8));
 
-                if (!hwgc_cmpxchg(s, lock_ptr + 8,
-                                  expected, writed, 4, &get))
+                if (!hwgc_cmpxchg(s, lock_ptr + 8, expected, writed, 4, &get))
                     return;
 
                 IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:6] retry lock CAS "
@@ -1835,8 +1740,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                             "addr=%lx\n",
                             lock_ptr + 8));
 
-        if (!hwgc_cmpxchg(s, lock_ptr + 8,
-                          expected, writed, 4, &get))
+        if (!hwgc_cmpxchg(s, lock_ptr + 8, expected, writed, 4, &get))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:7] release result=%u\n",
@@ -1897,8 +1801,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
                             "thread=%lx lock_base=%lx, goto ATTEMPT_ALLOC\n",
                             d->pars.thread, d->pars.lockPtr));
 
-        if (!hwgc_access(s, d->pars.lockPtr,
-                         &d->pars.thread, 8, true))
+        if (!hwgc_access(s, d->pars.lockPtr, &d->pars.thread, 8, true))
             return;
 
         hwgc_goto_stage(s, STAGE_ATTEMPT_ALLOC, 0);
@@ -1929,8 +1832,7 @@ static void stage_allocate_during_gc_function(HWGCDevState *s)
         expected = 1;
         writed = 0;
 
-        if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8,
-                          expected, writed, 4, &get))
+        if (!hwgc_cmpxchg(s, d->pars.lockPtr + 8, expected, writed, 4, &get))
             return;
 
         IFDEF(TRACE, printf("[ALLOCATE_DURING_GC:11] global unlock result=%u\n",
@@ -2483,8 +2385,7 @@ static void stage_alloc_free_region_function(HWGCDevState *s)
 
         addr = d->free_list_ptr + (d->from_head ? 0x28 : 0x30);
 
-        if (!hwgc_access(s, addr,
-                         &d->res_conf, 8, true))
+        if (!hwgc_access(s, addr, &d->res_conf, 8, true))
             return;
         IFDEF(TRACE, printf("[ALLOC_FREE_REGION:1] access %lx (%x bytes) to write %lx\n",
                             addr, 8,
@@ -2565,7 +2466,7 @@ static void stage_alloc_free_region_function(HWGCDevState *s)
         uint writeValue = d->list_length - 1;
         if (!hwgc_access(s, d->free_list_ptr + 0x10, &writeValue, 4, true))
             return;
-        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:5] access %lx (%x bytes) to write %lx\n",
+        IFDEF(TRACE, printf("[ALLOC_FREE_REGION:5] access %lx (%x bytes) to write %x\n",
                             d->free_list_ptr + 0x10, 8, writeValue));
 
         hwgc_goto_stage(s, STAGE_NEW_GC_ALLOC, d->alloc_free_sel ? 3 : 1);
@@ -2597,12 +2498,10 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
                             d->alloc_region + 0x10,
                             d->alloc_region + 0x8));
 
-        if (!hwgc_access(s, d->alloc_region + 0x10,
-                         &d->alloc_top, 8, false))
+        if (!hwgc_access(s, d->alloc_region + 0x10, &d->alloc_top, 8, false))
             return;
 
-        if (!hwgc_access(s, d->alloc_region + 0x8,
-                         &d->alloc_end, 8, false))
+        if (!hwgc_access(s, d->alloc_region + 0x8, &d->alloc_end, 8, false))
             return;
 
         IFDEF(TRACE, printf("[PAR_ALLOCATE_IML:0] alloc_top=%lx "
@@ -2632,9 +2531,7 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
                                 d->alloc_region + 0x10,
                                 d->alloc_top, new_top));
 
-            if (!hwgc_cmpxchg(s, d->alloc_region + 0x10,
-                              d->alloc_top, new_top, 8,
-                              &d->region_attr_ptr))
+            if (!hwgc_cmpxchg(s, d->alloc_region + 0x10, d->alloc_top, new_top, 8, &d->region_attr_ptr))
                 return;
 
             IFDEF(TRACE, printf("[PAR_ALLOCATE_IML:1] CAS returned=%lx %s\n",
@@ -2653,9 +2550,7 @@ static void stage_par_allocate_iml_function(HWGCDevState *s)
                 s->sub_stage = 2;
             }
             else
-            {
                 s->sub_stage = 0;
-            }
         }
         else
         {
@@ -2747,8 +2642,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
                                 d->blk_start, d->blk_end,
                                 d->bot_part_ptr));
 
-            if (!hwgc_access(s, d->bot_part_ptr,
-                             &d->next_offset_threshold, 8, false))
+            if (!hwgc_access(s, d->bot_part_ptr, &d->next_offset_threshold, 8, false))
                 return;
 
             IFDEF(TRACE, printf("[PAR_ALLOCATE:1] "
@@ -2776,12 +2670,10 @@ static void stage_par_allocate_function(HWGCDevState *s)
 
         if (d->blk_end > d->next_offset_threshold)
         {
-            if (!hwgc_access(s, d->bot_part_ptr + 0x8,
-                             &d->index, 8, false))
+            if (!hwgc_access(s, d->bot_part_ptr + 0x8, &d->index, 8, false))
                 return;
 
-            if (!hwgc_access(s, d->bot_part_ptr + 0x10,
-                             &d->bot_ptr, 8, false))
+            if (!hwgc_access(s, d->bot_part_ptr + 0x10, &d->bot_ptr, 8, false))
                 return;
 
             IFDEF(TRACE, printf("[PAR_ALLOCATE:2] BOT index=%zu "
@@ -2806,8 +2698,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
                             "from=%lx\n",
                             d->bot_ptr + 0x10));
 
-        if (!hwgc_access(s, d->bot_ptr + 0x10,
-                         &d->array, 8, false))
+        if (!hwgc_access(s, d->bot_ptr + 0x10, &d->array, 8, false))
             return;
 
         IFDEF(TRACE, printf("[PAR_ALLOCATE:3] BOT array=%lx\n",
@@ -2829,8 +2720,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
 
     case 5:
     {
-        if (!hwgc_access(s, d->bot_ptr,
-                         &d->reserved_start, 8, false))
+        if (!hwgc_access(s, d->bot_ptr, &d->reserved_start, 8, false))
             return;
 
         IFDEF(TRACE, printf("[PAR_ALLOCATE:5] reserved_start=%lx\n",
@@ -2854,9 +2744,7 @@ static void stage_par_allocate_function(HWGCDevState *s)
                             end_index, rem_st, rem_end,
                             d->start_card, d->end_card));
 
-        if (d->index + 1 <= end_index &&
-            rem_st < rem_end &&
-            d->start_card <= d->end_card)
+        if (d->index + 1 <= end_index && rem_st < rem_end && d->start_card <= d->end_card)
         {
             d->remaining = d->end_card - d->start_card + 1;
             d->begin = d->array + d->start_card;
@@ -2914,23 +2802,19 @@ static void stage_par_allocate_function(HWGCDevState *s)
 
     case 8:
     {
-        size_t end_index =
-            (d->blk_end - 8 - d->reserved_start) >> 9;
+        size_t end_index = (d->blk_end - 8 - d->reserved_start) >> 9;
 
         d->index = end_index + 1;
-        d->next_offset_threshold = d->reserved_start +
-                                   ((end_index << 6) + 64) * 8;
+        d->next_offset_threshold = d->reserved_start + ((end_index << 6) + 64) * 8;
 
         IFDEF(TRACE, printf("[PAR_ALLOCATE:8] update BOT metadata: "
                             "index=%zu next_threshold=%lx\n",
                             d->index, d->next_offset_threshold));
 
-        if (!hwgc_access(s, d->bot_part_ptr,
-                         &d->next_offset_threshold, 8, true))
+        if (!hwgc_access(s, d->bot_part_ptr, &d->next_offset_threshold, 8, true))
             return;
 
-        if (!hwgc_access(s, d->bot_part_ptr + 0x8,
-                         &d->index, 8, true))
+        if (!hwgc_access(s, d->bot_part_ptr + 0x8, &d->index, 8, true))
             return;
 
         s->sub_stage = 9;
@@ -3001,8 +2885,7 @@ static void stage_trace_function(HWGCDevState *s)
             uintptr_t len_addr;
 
             d->end = d->common_oop_array_length % d->pars.chunkSize;
-            len_addr = d->to_obj +
-                       (d->pars.useCompressedKlassPointers ? 12 : 16);
+            len_addr = d->to_obj + (d->pars.useCompressedKlassPointers ? 12 : 16);
 
             IFDEF(TRACE, printf("[TRACE:0] array trace: src_len=%u "
                                 "chunk=%u first_chunk_len=%u "
@@ -3022,8 +2905,7 @@ static void stage_trace_function(HWGCDevState *s)
                                 "addr=%lx\n",
                                 d->klass_ptr + 160));
 
-            if (!hwgc_access(s, d->klass_ptr + 160,
-                             &d->vtable_len, 4, false))
+            if (!hwgc_access(s, d->klass_ptr + 160, &d->vtable_len, 4, false))
                 return;
 
             s->sub_stage = 3;
@@ -3036,8 +2918,7 @@ static void stage_trace_function(HWGCDevState *s)
         if (d->common_oop_array_length > d->end)
         {
             uintptr_t pushData = d->from_obj + 0x2;
-            uintptr_t queue_addr =
-                d->pars.taskQueueElemsBase + d->localBot * 8;
+            uintptr_t queue_addr = d->pars.taskQueueElemsBase + d->localBot * 8;
 
             IFDEF(TRACE, printf("[TRACE:1] push remaining array task=%lx "
                                 "queue[%u]=%lx\n",
@@ -3064,8 +2945,7 @@ static void stage_trace_function(HWGCDevState *s)
     case 2:
     {
         size_t oop_size = d->pars.useCompressedOops ? 4 : 8;
-        uintptr_t base = d->to_obj +
-                         (d->pars.useCompressedKlassPointers ? 16 : 24);
+        uintptr_t base = d->to_obj + (d->pars.useCompressedKlassPointers ? 16 : 24);
         uintptr_t low = base;
         uintptr_t high = base + d->end * oop_size;
 
@@ -3102,8 +2982,7 @@ static void stage_trace_function(HWGCDevState *s)
                             "addr=%lx\n",
                             d->vtable_len, d->klass_ptr + 296));
 
-        if (!hwgc_access(s, d->klass_ptr + 296,
-                         &d->region_attr_ptr, 8, false))
+        if (!hwgc_access(s, d->klass_ptr + 296, &d->region_attr_ptr, 8, false))
             return;
 
         IFDEF(TRACE, printf("[TRACE:3] oop-map info raw=%lx\n",
@@ -3190,12 +3069,11 @@ static void stage_trace_function(HWGCDevState *s)
 
         if (d->kid == 2)
         {
-            uint count_offset = d->pars.useCompressedKlassPointers ? 0x28 : 0x24;
+            uint count_offset = d->pars.useCompressedKlassPointers ? 0x24 : 0x28;
             IFDEF(TRACE, printf("[TRACE:7] read static count addr=%lx\n",
                                 d->from_obj + count_offset));
 
-            if (!hwgc_access(s, d->from_obj + count_offset,
-                             &d->staticCount, 4, false))
+            if (!hwgc_access(s, d->from_obj + count_offset, &d->staticCount, 4, false))
                 return;
 
             IFDEF(TRACE, printf("[TRACE:7] staticCount=%u\n",
@@ -3253,8 +3131,7 @@ static void stage_trace_function(HWGCDevState *s)
             uint32_t discovered_offset;
             uint32_t referent_offset;
 
-            if (d->pars.useCompressedKlassPointers &&
-                d->pars.useCompressedOops)
+            if (d->pars.useCompressedKlassPointers && d->pars.useCompressedOops)
             {
                 discovered_offset = 0x18;
                 referent_offset = 0xc;
@@ -3324,32 +3201,16 @@ static void stage_copy_function(HWGCDevState *s)
             return;
         }
 
-        /*
-         * 不逐 word 打印，避免复制大对象时日志爆炸。
-         * 打印首个、末个及每 256 个 word 的进度。
-         */
-        if ((d->i & 0xff) == 1 || d->i + 1 == d->size)
-        {
-            IFDEF(TRACE, printf("[COPY:0] progress=%u/%lu "
-                                "src=%lx dst=%lx\n",
-                                d->i, d->size,
-                                d->from_obj + d->i * 8,
-                                d->to_obj + d->i * 8));
-        }
+        IFDEF(TRACE, printf("[COPY:0] progress=%u/%lu "
+                            "src=%lx dst=%lx\n",
+                            d->i, d->size,
+                            d->from_obj + d->i * 8,
+                            d->to_obj + d->i * 8));
 
-        /*
-         * region_attr_ptr 用作异步 hwgc_access 的持久化读缓冲区，
-         * 不宜改为局部变量。
-         */
-        if (!hwgc_access(s, d->from_obj + d->i * 8,
-                         &d->region_attr_ptr, 8, false))
+        if (!hwgc_access(s, d->from_obj + d->i * 8, &d->region_attr_ptr, 8, false))
             return;
 
-        if ((d->i & 0xff) == 1 || d->i + 1 == d->size)
-        {
-            IFDEF(TRACE, printf("[COPY:0] read word[%u]=%lx\n",
-                                d->i, d->region_attr_ptr));
-        }
+        IFDEF(TRACE, printf("[COPY:0] read word[%u]=%lx\n", d->i, d->region_attr_ptr));
 
         s->sub_stage = 1;
         break;
@@ -3357,15 +3218,11 @@ static void stage_copy_function(HWGCDevState *s)
 
     case 1:
     {
-        if ((d->i & 0xff) == 0 || d->i + 1 == d->size)
-        {
-            IFDEF(TRACE, printf("[COPY:1] write word[%u]=%lx to=%lx\n",
-                                d->i, d->region_attr_ptr,
-                                d->to_obj + d->i * 8));
-        }
+        IFDEF(TRACE, printf("[COPY:1] write word[%u]=%lx to=%lx\n",
+                            d->i, d->region_attr_ptr,
+                            d->to_obj + d->i * 8));
 
-        if (!hwgc_access(s, d->to_obj + d->i * 8,
-                         &d->region_attr_ptr, 8, true))
+        if (!hwgc_access(s, d->to_obj + d->i * 8, &d->region_attr_ptr, 8, true))
             return;
 
         d->i++;
@@ -3436,6 +3293,7 @@ static void stage_do_oop_work_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[DO_OOP_WORK:0] read oop src=%lx size=%zu\n",
                             d->src, oop_size));
 
+        d->heap_oop = 0;
         if (!hwgc_access(s, d->src, &d->heap_oop, oop_size, false))
             return;
 
@@ -3450,9 +3308,6 @@ static void stage_do_oop_work_function(HWGCDevState *s)
     {
         uintptr_t region_attr_addr;
 
-        if (d->pars.useCompressedOops)
-            d->heap_oop = (uint32_t)d->heap_oop;
-
         if (d->heap_oop == 0)
         {
             IFDEF(TRACE, printf("[DO_OOP_WORK:1] null oop, return previous\n"));
@@ -3463,20 +3318,18 @@ static void stage_do_oop_work_function(HWGCDevState *s)
 
         if (d->pars.useCompressedOops)
         {
-            d->heap_oop = d->pars.compressedOopBase +
-                          (d->heap_oop << d->pars.compressedOopShift);
+            d->heap_oop = (uint32_t)d->heap_oop;
+            d->heap_oop = d->pars.compressedOopBase + (d->heap_oop << d->pars.compressedOopShift);
         }
 
-        region_attr_addr = d->pars.regionAttrBiasedBase +
-                           (d->heap_oop >> d->pars.regionAttrShiftBy) * 2;
+        region_attr_addr = d->pars.regionAttrBiasedBase + (d->heap_oop >> d->pars.regionAttrShiftBy) * 2;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:1] decoded oop=%lx "
                             "region_attr_addr=%lx\n",
                             d->heap_oop, region_attr_addr));
 
         d->region_attr_ptr = 0;
-        if (!hwgc_access(s, region_attr_addr,
-                         &d->region_attr_ptr, 2, false))
+        if (!hwgc_access(s, region_attr_addr, &d->region_attr_ptr, 2, false))
             return;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:1] region_attr=0x%x type=%d\n",
@@ -3489,11 +3342,8 @@ static void stage_do_oop_work_function(HWGCDevState *s)
 
     case 2:
     {
-        int8_t region_attr_type =
-            (int8_t)(d->region_attr_ptr >> 8);
-        bool cross_region =
-            ((d->dest ^ d->heap_oop) >>
-             d->pars.logOfHRGrainBytes) != 0;
+        int8_t region_attr_type = (int8_t)(d->region_attr_ptr >> 8);
+        bool cross_region = ((d->dest ^ d->heap_oop) >> d->pars.logOfHRGrainBytes) != 0;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:2] attr=0x%x type=%d "
                             "cross_region=%d\n",
@@ -3502,10 +3352,8 @@ static void stage_do_oop_work_function(HWGCDevState *s)
 
         if (region_attr_type >= 0)
         {
-            uintptr_t writeElems = d->dest +
-                                   (d->pars.useCompressedOops ? 1 : 0);
-            uintptr_t queue_addr =
-                d->pars.taskQueueElemsBase + d->localBot * 8;
+            uintptr_t writeElems = d->dest + (d->pars.useCompressedOops ? 1 : 0);
+            uintptr_t queue_addr = d->pars.taskQueueElemsBase + d->localBot * 8;
 
             IFDEF(TRACE, printf("[DO_OOP_WORK:2] enqueue oop slot=%lx "
                                 "queue[%u]=%lx\n",
@@ -3541,9 +3389,7 @@ static void stage_do_oop_work_function(HWGCDevState *s)
 
     case 3:
     {
-        d->region = (d->heap_oop -
-                     ((uintptr_t)d->pars.heapRegionBias << d->pars.heapRegionShiftBy)) >>
-                    d->pars.logOfHRGrainBytes;
+        d->region = (d->heap_oop - ((uintptr_t)d->pars.heapRegionBias << d->pars.heapRegionShiftBy)) >> d->pars.logOfHRGrainBytes;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:3] humongous region=%u "
                             "candidate_addr=%lx\n",
@@ -3551,9 +3397,7 @@ static void stage_do_oop_work_function(HWGCDevState *s)
                             d->pars.humogousReclaimCandidateBoolBase +
                                 d->region));
 
-        if (!hwgc_access(s,
-                         d->pars.humogousReclaimCandidateBoolBase + d->region,
-                         &d->bool_base_value, 1, false))
+        if (!hwgc_access(s, d->pars.humogousReclaimCandidateBoolBase + d->region, &d->bool_base_value, 1, false))
             return;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:3] reclaim_candidate=%d\n",
@@ -3579,9 +3423,7 @@ static void stage_do_oop_work_function(HWGCDevState *s)
                             "region=%u\n",
                             d->region));
 
-        if (!hwgc_access(s,
-                         d->pars.humogousReclaimCandidateBoolBase + d->region,
-                         &d->bool_base_value, 1, true))
+        if (!hwgc_access(s, d->pars.humogousReclaimCandidateBoolBase + d->region, &d->bool_base_value, 1, true))
             return;
 
         s->sub_stage = 5;
@@ -3590,16 +3432,14 @@ static void stage_do_oop_work_function(HWGCDevState *s)
 
     case 5:
     {
-        uintptr_t region_attr_dest =
-            d->pars.regionAttrBase + d->region * 2;
+        uintptr_t region_attr_dest = d->pars.regionAttrBase + d->region * 2;
         int8_t dest_value = -1;
 
         IFDEF(TRACE, printf("[DO_OOP_WORK:5] mark region old, "
                             "attr_addr=%lx value=%d\n",
                             region_attr_dest + 1, dest_value));
 
-        if (!hwgc_access(s, region_attr_dest + 1,
-                         &dest_value, 1, true))
+        if (!hwgc_access(s, region_attr_dest + 1, &dest_value, 1, true))
             return;
 
         s->sub_stage = 6;
@@ -3664,12 +3504,10 @@ static void stage_aop_work_function(HWGCDevState *s)
             return;
         }
 
-        if (!hwgc_access(s, d->pars.cardTablePtr + 0x38,
-                         &d->byte_map, 8, false))
+        if (!hwgc_access(s, d->pars.cardTablePtr + 0x38, &d->byte_map, 8, false))
             return;
 
-        if (!hwgc_access(s, d->pars.cardTablePtr + 0x40,
-                         &d->byte_map_base, 8, false))
+        if (!hwgc_access(s, d->pars.cardTablePtr + 0x40, &d->byte_map_base, 8, false))
             return;
 
         d->res = d->byte_map_base + (d->aop_dest >> 9);
@@ -3686,12 +3524,10 @@ static void stage_aop_work_function(HWGCDevState *s)
 
     case 1:
     {
-        if (!hwgc_access(s, d->pars.pss + 0x1b0,
-                         &d->last_index, 8, false))
+        if (!hwgc_access(s, d->pars.pss + 0x1b0, &d->last_index, 8, false))
             return;
 
-        IFDEF(TRACE, printf("[AOP_WORK:1] last_index=%lx card_index=%lx\n",
-                            d->last_index, d->card_index));
+        IFDEF(TRACE, printf("[AOP_WORK:1] last_index=%lx card_index=%lx\n", d->last_index, d->card_index));
 
         if (d->card_index == d->last_index)
         {
@@ -3700,12 +3536,10 @@ static void stage_aop_work_function(HWGCDevState *s)
             return;
         }
 
-        if (!hwgc_access(s, d->pars.pss + 0x48,
-                         &d->index, 8, false))
+        if (!hwgc_access(s, d->pars.pss + 0x48, &d->index, 8, false))
             return;
 
-        if (!hwgc_access(s, d->pars.pss + 0x58,
-                         &d->buffer, 8, false))
+        if (!hwgc_access(s, d->pars.pss + 0x58, &d->buffer, 8, false))
             return;
 
         IFDEF(TRACE, printf("[AOP_WORK:1] queue index=%lx buffer=%lx\n",
@@ -3724,14 +3558,11 @@ static void stage_aop_work_function(HWGCDevState *s)
             IFDEF(TRACE, printf("[AOP_WORK:2] buffer full/empty, "
                                 "prepare node replacement\n"));
 
-            if (!hwgc_access(s, d->pars.pss + 0x20,
-                             &d->node_allocator_ptr, 8, false))
+            if (!hwgc_access(s, d->pars.pss + 0x20, &d->node_allocator_ptr, 8, false))
                 return;
-            if (!hwgc_access(s, d->pars.pss + 0x30,
-                             &d->offset30, 8, false))
+            if (!hwgc_access(s, d->pars.pss + 0x30, &d->offset30, 8, false))
                 return;
-            if (!hwgc_access(s, d->pars.pss + 0x38,
-                             &d->offset38, 8, false))
+            if (!hwgc_access(s, d->pars.pss + 0x38, &d->offset38, 8, false))
                 return;
 
             IFDEF(TRACE, printf("[AOP_WORK:2] node_allocator=%lx "
@@ -3750,17 +3581,14 @@ static void stage_aop_work_function(HWGCDevState *s)
 
                 if (!hwgc_access(s, d->old_node, &zero, 8, true))
                     return;
-                if (!hwgc_access(s, d->old_node + 8,
-                                 &d->offset30, 8, true))
+                if (!hwgc_access(s, d->old_node + 8, &d->offset30, 8, true))
                     return;
-                if (!hwgc_access(s, d->pars.pss + 0x30,
-                                 &d->old_node, 8, true))
+                if (!hwgc_access(s, d->pars.pss + 0x30, &d->old_node, 8, true))
                     return;
 
                 if (d->offset38 == 0)
                 {
-                    if (!hwgc_access(s, d->pars.pss + 0x38,
-                                     &d->old_node, 8, true))
+                    if (!hwgc_access(s, d->pars.pss + 0x38, &d->old_node, 8, true))
                         return;
                 }
             }
@@ -3783,8 +3611,7 @@ static void stage_aop_work_function(HWGCDevState *s)
         IFDEF(TRACE, printf("[AOP_WORK:3] pop free node from addr=%lx\n",
                             d->node_allocator_ptr + 0x80));
 
-        if (!hwgc_access(s, d->node_allocator_ptr + 0x80,
-                         &d->old_node, 8, false))
+        if (!hwgc_access(s, d->node_allocator_ptr + 0x80, &d->old_node, 8, false))
             return;
 
         IFDEF(TRACE, printf("[AOP_WORK:3] free-list head node=%lx\n",
@@ -3792,13 +3619,11 @@ static void stage_aop_work_function(HWGCDevState *s)
 
         if (d->old_node != 0)
         {
-            if (!hwgc_access(s, d->old_node + 0x8,
-                             &d->new_top, 8, false))
+            if (!hwgc_access(s, d->old_node + 0x8, &d->new_top, 8, false))
                 return;
 
             uintptr_t zero = 0;
-            if (!hwgc_access(s, d->old_node + 0x8,
-                             &zero, 8, true))
+            if (!hwgc_access(s, d->old_node + 0x8, &zero, 8, true))
                 return;
 
             IFDEF(TRACE, printf("[AOP_WORK:3] node=%lx next=%lx \n",
@@ -3816,8 +3641,7 @@ static void stage_aop_work_function(HWGCDevState *s)
                             d->node_allocator_ptr + 0x80,
                             d->new_top));
 
-        if (!hwgc_access(s, d->node_allocator_ptr + 0x80,
-                         &d->new_top, 8, true))
+        if (!hwgc_access(s, d->node_allocator_ptr + 0x80, &d->new_top, 8, true))
             return;
 
         s->sub_stage = 5;
@@ -3856,8 +3680,7 @@ static void stage_aop_work_function(HWGCDevState *s)
                             "read node index addr=%lx\n",
                             d->buffer, d->node_allocator_ptr));
 
-        if (!hwgc_access(s, d->node_allocator_ptr,
-                         &d->index, 8, false))
+        if (!hwgc_access(s, d->node_allocator_ptr, &d->index, 8, false))
             return;
 
         d->index = d->index * 8;
@@ -3878,18 +3701,15 @@ static void stage_aop_work_function(HWGCDevState *s)
                             d->card_index, idx,
                             d->buffer + idx * 8));
 
-        if (!hwgc_access(s, d->buffer + idx * 8,
-                         &d->res, 8, true))
+        if (!hwgc_access(s, d->buffer + idx * 8, &d->res, 8, true))
             return;
 
         d->index -= 8;
 
-        if (!hwgc_access(s, d->pars.pss + 0x48,
-                         &d->index, 8, true))
+        if (!hwgc_access(s, d->pars.pss + 0x48, &d->index, 8, true))
             return;
 
-        if (!hwgc_access(s, d->pars.pss + 0x1b0,
-                         &d->card_index, 8, true))
+        if (!hwgc_access(s, d->pars.pss + 0x1b0, &d->card_index, 8, true))
             return;
 
         IFDEF(TRACE, printf("[AOP_WORK:7] appended, "
