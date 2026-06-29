@@ -770,9 +770,6 @@ static void stage_copy2survivor_function(HWGCDevState *s)
                                     d->common_m_value, d->age));
             }
 
-            if (!hwgc_access(s, d->pars.pss + 0x17c, &d->pars.ageThreshold, 4, false))
-                return;
-
             if (d->age < d->pars.ageThreshold)
             {
                 d->dest_attr = d->src_region_attr;
@@ -1185,6 +1182,7 @@ static void stage_alloc_function(HWGCDevState *s)
 
             if (!hwgc_access(s, d->pars.pss + 0x17c, &refill_failed_value, 4, true))
                 return;
+            d->pars.ageThreshold = 0;
         }
 
         IFDEF(TRACE, printf("[ALLOC:4] mark destination allocation "
