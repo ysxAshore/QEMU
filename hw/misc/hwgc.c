@@ -1232,7 +1232,7 @@ static void stage_allocate_direct_function(HWGCDevState *s)
         uintptr_t plab_stats_ptr = d->pars.g1h + 0x250;
 
         if (dest_attr_type == 1)
-            plab_stats_ptr = d->pars.g1h + 0x2d0;
+            plab_stats_ptr = d->pars.g1h + 0x2e0;
 
         IFDEF(TRACE, printf("[ALLOCATE_DIRECT:0] g1h=%lx stats_ptr=%lx "
                             "stats_size_addr=%lx\n",
