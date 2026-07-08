@@ -248,4 +248,7 @@ config XLNX_VERSAL_TRNG
 config MY_TEST_DEVICE
     bool
 
+config MY_PLATFORM_GC
+    bool
+
 source macio/Kconfig

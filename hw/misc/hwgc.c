@@ -19,7 +19,6 @@ static void hwgc_tlb_insert_locked(HWGCDevState *s, uint64_t va, hwaddr pa)
     s->tlb[idx].pa_page = pa_page;
 
     IFDEF(TRACE, printf("[hwgc] TLB insert: idx=%u va_page=0x%016" PRIx64
-
                         " pa_page=0x%016" HWADDR_PRIx "\n",
                         idx, va_page, pa_page));
 }

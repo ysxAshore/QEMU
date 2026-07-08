@@ -27,3 +27,4 @@ config LOONGARCH_VIRT
     select ACPI_HMAT
 	select HWGC
 	select MY_TEST_DEVICE
+	select MY_PLATFORM_GC

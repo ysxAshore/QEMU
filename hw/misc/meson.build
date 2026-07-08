@@ -166,4 +166,5 @@ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
 system_ss.add(when: 'CONFIG_MY_TEST_DEVICE', if_true: files('test_device.c'))
 
 # HWGC devicw
-system_ss.add(when: 'CONFIG_HWGC', if_true: files('hwgc_platform.c'))
+system_ss.add(when: 'CONFIG_HWGC', if_true: files('hwgc.c'))
+system_ss.add(when: 'CONFIG_MY_PLATFORM_GC', if_true: files('hwgc_platform.c'))

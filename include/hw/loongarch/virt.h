@@ -77,6 +77,9 @@
 #define VIRT_TEST_DEVICE_BASE 0x100d1000UL
 #define VIRT_TEST_DEVICE_LEN 0x100
 
+#define VIRT_GC_DEVICE_BASE 0x100d2000UL
+#define VIRT_GC_DEVICE_LEN 0x1000
+
 /*
  * GSI_BASE is hard-coded with 64 in linux kernel, else kernel fails to boot
  * 0  - 15  GSI for ISA devices even if there is no ISA devices
@@ -91,6 +94,7 @@
 #define VIRT_RTC_IRQ (VIRT_GSI_BASE + 6)
 #define VIRT_SCI_IRQ (VIRT_GSI_BASE + 7)
 #define VIRT_PLATFORM_BUS_IRQ (VIRT_GSI_BASE + 8)
+#define VIRT_GC_IRQ (VIRT_GSI_BASE + 15)
 #define VIRT_PLATFORM_BUS_NUM_IRQS 2
 
 #define COMMAND_LINE_SIZE 512

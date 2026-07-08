@@ -23,8 +23,7 @@
 
 #define TYPE_HWGC_PLATFORM_DEV "hwgc-platform"
 typedef struct HWGCPlatformDevState HWGCPlatformDevState;
-DECLARE_INSTANCE_CHECKER(HWGCPlatformDevState, HWGC_PLATFORM_DEV,
-                         TYPE_HWGC_PLATFORM_DEV)
+DECLARE_INSTANCE_CHECKER(HWGCPlatformDevState, HWGC_PLATFORM_DEV, TYPE_HWGC_PLATFORM_DEV)
 
 #define REG_STATUS 0x0
 #define REG_IRQ_STATUS 0x4
@@ -320,12 +319,11 @@ struct HWGCStageData
     uintptr_t res_conf;
 };
 
+// 比PCI DevState 多了一个 irq 然后PCIDevice变为SysBusDevice
 struct HWGCPlatformDevState
 {
-    /*< private >*/
     SysBusDevice parent_obj;
 
-    /*< public >*/
     MemoryRegion mmio;
     qemu_irq irq;
 

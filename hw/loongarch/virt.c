@@ -268,6 +268,20 @@ static DeviceState *create_acpi_ged(DeviceState *pch_pic,
     return dev;
 }
 
+static DeviceState *create_test_device(DeviceState *pch_pic)
+{
+    DeviceState *dev;
+
+    dev = qdev_new("hwgc-platform");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    /* 将设备的第0个MMIO区域 映射到 物理地址 */
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, VIRT_GC_DEVICE_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(pch_pic, VIRT_GC_IRQ - VIRT_GSI_BASE));
+
+    return dev;
+}
+
 static DeviceState *create_platform_bus(DeviceState *pch_pic)
 {
     DeviceState *dev;
@@ -335,6 +349,7 @@ static void virt_devices_init(DeviceState *pch_pic,
     memory_region_add_subregion(get_system_memory(), VIRT_PCI_IO_BASE,
                                 pio_alias);
 
+    printf("PCI NUMs %d\n", PCI_NUM_PINS);
     for (i = 0; i < PCI_NUM_PINS; i++)
     {
         sysbus_connect_irq(d, i,
@@ -367,6 +382,7 @@ static void virt_devices_init(DeviceState *pch_pic,
                          qdev_get_gpio_in(pch_pic,
                                           VIRT_RTC_IRQ - VIRT_GSI_BASE));
 
+    create_test_device(pch_pic);
     /* acpi ged */
     lvms->acpi_ged = create_acpi_ged(pch_pic, lvms);
     /* platform bus */
