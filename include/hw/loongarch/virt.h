@@ -77,8 +77,9 @@
 #define VIRT_TEST_DEVICE_BASE 0x100d1000UL
 #define VIRT_TEST_DEVICE_LEN 0x100
 
-#define VIRT_GC_DEVICE_BASE 0x100d2000UL
-#define VIRT_GC_DEVICE_LEN 0x1000
+#define VIRT_GC_BASE0 0x100d2000UL
+#define VIRT_GC_BASE1 0x100d3000UL
+#define VIRT_GC_LEN 0x1000
 
 /*
  * GSI_BASE is hard-coded with 64 in linux kernel, else kernel fails to boot

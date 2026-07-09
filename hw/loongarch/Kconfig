@@ -28,3 +28,4 @@ config LOONGARCH_VIRT
 	select HWGC
 	select MY_TEST_DEVICE
 	select MY_PLATFORM_GC
+	select OR_IRQ

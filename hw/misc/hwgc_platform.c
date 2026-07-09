@@ -54,6 +54,7 @@ static void hwgc_raise_irq_from_worker(HWGCPlatformDevState *s, uint32_t bits)
     qemu_set_irq(s->irq, 1);
     bql_unlock();
 
+    printf("[hwgc] s->irq->n %d,  irq_pars0 %lx, irq_pars1 %lx\n", s->irq->n, s->irq_par0, s->irq_par1);
     printf("[hwgc] raise irq from worker: bits=0x%08x irq_status=0x%08x %d\n", bits, qatomic_read(&s->irq_status), s->irq->n);
 }
 
