@@ -324,6 +324,8 @@ struct HWGCPlatformDevState
 {
     SysBusDevice parent_obj;
 
+    QEMUBH *irq_bh;
+
     MemoryRegion mmio;
     qemu_irq irq;
 

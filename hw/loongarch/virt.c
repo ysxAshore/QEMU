@@ -21,7 +21,6 @@
 #include "hw/loongarch/virt.h"
 #include "system/address-spaces.h"
 #include "hw/irq.h"
-#include "hw/or-irq.h"
 #include "net/net.h"
 #include "hw/loader.h"
 #include "elf.h"
@@ -269,40 +268,9 @@ static DeviceState *create_acpi_ged(DeviceState *pch_pic,
     return dev;
 }
 
-static DeviceState *create_hwgc_or_irq(DeviceState *pch_pic,
-                                       unsigned int num_lines)
-{
-    DeviceState *or_irq;
-
-    or_irq = qdev_new(TYPE_OR_IRQ);
-
-    object_property_set_int(OBJECT(or_irq),
-                            "num-lines",
-                            num_lines,
-                            &error_fatal);
-
-    /*
-     * 注意：or-irq 不是 SysBusDevice，不能用 sysbus_realize_and_unref。
-     */
-    qdev_realize_and_unref(or_irq, NULL, &error_fatal);
-
-    /*
-     * OR gate 的输出 GPIO 0 接到 pch_pic 的输入。
-     * 这里用 qdev_connect_gpio_out，不是 sysbus_connect_irq。
-     */
-    qdev_connect_gpio_out(or_irq, 0,
-                          qdev_get_gpio_in(pch_pic, VIRT_GC_IRQ - VIRT_GSI_BASE));
-
-    printf("hwgc or-irq: num_lines=%u pch_irq=%d guest_irq=%d\n",
-           num_lines, VIRT_GC_IRQ - VIRT_GSI_BASE, VIRT_GC_IRQ);
-
-    return or_irq;
-}
-
 static DeviceState *create_hwgc_platform_device(DeviceState *pch_pic,
                                                 hwaddr base,
-                                                const char *id,
-                                                qemu_irq irq_sink)
+                                                int bias)
 {
     DeviceState *dev;
     SysBusDevice *sbd;
@@ -313,17 +281,7 @@ static DeviceState *create_hwgc_platform_device(DeviceState *pch_pic,
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, base);
 
-    // sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(pch_pic, VIRT_GC_IRQ - VIRT_GSI_BASE));
-
-    // printf("hwgc-platform %s: base=0x%" HWADDR_PRIx
-    //        " pch_irq=%d guest_irq=%d\n",
-    //        id, base, VIRT_GC_IRQ - VIRT_GSI_BASE, VIRT_GC_IRQ);
-
-    sysbus_connect_irq(sbd, 0, irq_sink);
-
-    printf("hwgc-platform %s: base=0x%" HWADDR_PRIx
-           " guest_irq=%d\n",
-           id, base, VIRT_GC_IRQ);
+    sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(pch_pic, bias));
 
     return dev;
 }
@@ -428,9 +386,14 @@ static void virt_devices_init(DeviceState *pch_pic,
                          qdev_get_gpio_in(pch_pic,
                                           VIRT_RTC_IRQ - VIRT_GSI_BASE));
 
-    DeviceState *hwgc_or_irq = create_hwgc_or_irq(pch_pic, 2);
-    create_hwgc_platform_device(pch_pic, VIRT_GC_BASE0, "hwgc-platform0", qdev_get_gpio_in(hwgc_or_irq, 0));
-    create_hwgc_platform_device(pch_pic, VIRT_GC_BASE1, "hwgc-platform1", qdev_get_gpio_in(hwgc_or_irq, 1));
+    uintptr_t addr[VIRT_GC_COUNT] = {VIRT_GC_BASE0, VIRT_GC_BASE1};
+    for (i = 0; i < VIRT_GC_COUNT; ++i)
+    {
+        create_hwgc_platform_device(pch_pic, addr[i], VIRT_GC_IRQ - VIRT_GSI_BASE + i);
+        printf("hwgc-platform %d: base=0x%" HWADDR_PRIx
+               " pch_irq=%d guest_irq=%d\n",
+               i, addr[i], VIRT_GC_IRQ - VIRT_GSI_BASE + i, VIRT_GC_IRQ + i);
+    }
     /* acpi ged */
     lvms->acpi_ged = create_acpi_ged(pch_pic, lvms);
     /* platform bus */

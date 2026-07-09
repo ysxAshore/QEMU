@@ -42,6 +42,25 @@ static bool hwgc_tlb_lookup_locked(HWGCPlatformDevState *s, uint64_t va, hwaddr 
     return true;
 }
 
+static void hwgc_irq_bh(void *opaque)
+{
+    HWGCPlatformDevState *s = opaque;
+    uint32_t status;
+    uint32_t irq_status;
+
+    status = qatomic_read(&s->status);
+    irq_status = qatomic_read(&s->irq_status);
+
+    printf("[HWGC %p] irq_bh: status=0x%08x irq_status=0x%08x irq_bh=%p\n",
+           s, status, irq_status, s->irq_bh);
+
+    if ((status & ST_IRQ_EN) && irq_status)
+    {
+        qemu_set_irq(s->irq, 1);
+        printf("[HWGC %p] irq_bh: qemu_set_irq HIGH\n", s);
+    }
+}
+
 // PCI Device 通过 MSI 或者 Legacy INTx 来触发中断，SysBusDevice 通过 qemu_set_irq 来触发中断
 static void hwgc_raise_irq_from_worker(HWGCPlatformDevState *s, uint32_t bits)
 {
@@ -50,9 +69,8 @@ static void hwgc_raise_irq_from_worker(HWGCPlatformDevState *s, uint32_t bits)
     if (!(qatomic_read(&s->status) & ST_IRQ_EN))
         return;
 
-    bql_lock();
-    qemu_set_irq(s->irq, 1);
-    bql_unlock();
+    if (s->irq_bh)
+        qemu_bh_schedule(s->irq_bh);
 
     printf("[hwgc] s->irq->n %d,  irq_pars0 %lx, irq_pars1 %lx\n", s->irq->n, s->irq_par0, s->irq_par1);
     printf("[hwgc] raise irq from worker: bits=0x%08x irq_status=0x%08x %d\n", bits, qatomic_read(&s->irq_status), s->irq->n);
@@ -3846,9 +3864,9 @@ static void do_hwgc_work(void *opaque)
         s->timer_running = false;
         qatomic_and(&s->status, ~ST_BUSY);
         qatomic_or(&s->status, ST_DONE);
+        qemu_mutex_unlock(&s->lock);
 
         hwgc_raise_irq_from_worker(s, IRQ_DONE);
-        qemu_mutex_unlock(&s->lock);
         break;
 
     default:
@@ -4193,6 +4211,7 @@ static void hwgc_platform_realize(DeviceState *dev, Error **errp)
     qemu_mutex_unlock(&s->lock);
 
     s->tick_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, hwgc_tick_timer_cb, s);
+    s->irq_bh = qemu_bh_new(hwgc_irq_bh, s);
 
     qemu_thread_create(&s->worker, "hwgc-platform",
                        hwgc_worker_thread, s,
@@ -4215,6 +4234,12 @@ static void hwgc_platform_unrealize(DeviceState *dev)
         timer_del(s->tick_timer);
         timer_free(s->tick_timer);
         s->tick_timer = NULL;
+    }
+
+    if (s->irq_bh)
+    {
+        qemu_bh_delete(s->irq_bh);
+        s->irq_bh = NULL;
     }
 
     qemu_thread_join(&s->worker);
